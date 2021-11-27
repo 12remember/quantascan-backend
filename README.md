@@ -13,16 +13,15 @@ The backend and front end are saperated
 
 ## Current flow 
 
-Scraper gets data every x min from qrl website 
+-  Scraper gets data every x min from qrl website 
                   ↧
-Save data in Postgresql (raw tables)
+- Save data in Postgresql (raw tables)
                   ↧
-Scripts getting raw data every x min and calculate 
+- Scripts getting raw data every x min and calculate 
                   ↧
-Saves data in Postgresql (aggregate tables)
+- Saves data in Postgresql (aggregate tables)
                   ↧
-
-Quantascan Frontend call to the Aggregate Tables              
+- Quantascan Frontend call to the Aggregate Tables              
                                   
 
 ## Need help with
