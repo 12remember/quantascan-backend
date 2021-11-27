@@ -1,49 +1,48 @@
-# Heroku Django Starter Template
 
-An utterly fantastic project starter template for Django 2.0.
+# Qrl analytics
 
-## Features
+This is a project that gives insights in the qrl blockchain 
 
-- Production-ready configuration for Static Files, Database Settings, Gunicorn, etc.
-- Enhancements to Django's static file serving functionality via WhiteNoise.
-- Latest Python 3.6 runtime environment.
+The backend and front end are saperated
 
-## How to Use
+- The Backend is based on  django and scrapy. 
+- Data is stored in a Postgresql database
+- Frontend is based on Vue
+- Frontend gets it data with an API call (django rest framework)
 
-To use this project, follow these steps:
 
-1. Create your working environment.
-2. Install Django (`$ pipenv install django`)
-3. Create a new project using this template
+## Current flow 
 
-## Creating Your Project
+Scraper gets data every x min from qrl website 
+                  ↧
+Save data in Postgresql (raw tables)
+                  ↧
+Scripts getting raw data every x min and calculate 
+                  ↧
+Saves data in Postgresql (aggregate tables)
+                  ↧
 
-Using this template to create a new Django app is easy::
+Quantascan Frontend call to the Aggregate Tables              
+                                  
 
-    $ django-admin.py startproject --template=https://github.com/heroku/heroku-django-template/archive/master.zip --name=Procfile helloworld
+## Need help with
 
-(If this doesn't work on windows, replace `django-admin.py` with `django-admin`)
+- Backend - Better way to access the blockchain data instead of scraping
+- Backend - Better performance database calls 
+- Backend - Increase error resistant
 
-You can replace ``helloworld`` with your desired project name.
+- Frontend - improve UX
 
-## Deployment to Heroku
+- General - Idea's to improve insights
 
-    $ git init
-    $ git add -A
-    $ git commit -m "Initial commit"
+## Importance List
 
-    $ heroku create
-    $ git push heroku master
+First priority is to get all the data from the blockchain and make collection of data resistant to errors
 
-    $ heroku run python manage.py migrate
+After that 
+- improvement in speed (backend)
+- improvement of UX (frontend)
 
-See also, a [ready-made application](https://github.com/heroku/python-getting-started), ready to deploy.
 
 
 ## License: MIT
-
-## Further Reading
-
-- [Gunicorn](https://warehouse.python.org/project/gunicorn/)
-- [WhiteNoise](https://warehouse.python.org/project/whitenoise/)
-- [dj-database-url](https://warehouse.python.org/project/dj-database-url/)
