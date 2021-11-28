@@ -62,7 +62,7 @@ _____ quantascan-frontend
 
 
 ## Create Postgresql database 
-1. Follow the steps from [Setting up a local postgresql database](https://www.prisma.io/dataguide/postgresql/setting-up-a-local-postgresql-database "prisma.io")
+1. Follow the steps from [Setting up a local postgresql database](https://www.prisma.io/dataguide/postgresql/setting-up-a-local-postgresql-database"prisma.io")
 
 2.  Run postgresql 12
 
@@ -74,7 +74,7 @@ _____ quantascan-frontend
     port = '5432'
 
 4.  Start the server
-5.  Check if you can access the database with a program like [pgadmin](https://www.prisma.io/dataguide/postgresql/setting-up-a-local-postgresql-database "pgadmin") 
+5.  Check if you can access the database with a program like [pgadmin](https://www.pgadmin.org/"pgadmin") 
 
 ## Run django
 1. Go to map ""/QRL/quantascan-backend"
@@ -96,6 +96,18 @@ starting the scraper to get some data to the local database
 6. Spider will run, depending on how much data you want
 7. the longer the spider runs the more data 
 8. If you want to quit crawling press ctrl + c, the spider will stop
+
+
+
+## Run analytics Scripts
+to fill the aggegrated tables python scripts are used for the calculaton
+1. go to map "/QRL/quantascan-backend/qrl_analytic_scripts"
+2. open a terminal and run 
+3. python add-wallet-stats.py
+4. python analyze-blocks-daily.py
+5. python analyze-transactions-daily.py
+On the server I've created a cronjob for this
+
 
 ## Note 
 Be gentle for the qrl server, as scraping will load their server
