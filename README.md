@@ -5,14 +5,14 @@ Quantascan is an analytics website for the quantum resistant ledger blockchain.
 
 This is the backend of quantascan.io
 
-The backend and front end are separated and hosted on Heroku on two different dyno's
+The backend and frontend are separated and hosted on Heroku on two different dyno's
 
 - The Backend is based on Django and Scrapy. 
 - Data is stored in a Postgresql database
 - Frontend is based on Vue
 
 
-## Current flow 
+## Current dataflow 
 
 - Scraper gets data every 10 min from qrl explorer website
                   ↧
@@ -40,9 +40,8 @@ Looking for help to optimize queries
 If you know a way to to prevent this, please let me know
 
 
-### General - Idea's to improve insights
+### General - Idea's to improve insights or dataflow
 Let me know if you have idea's to improve quantascan.io.
-
 
 
 
@@ -95,8 +94,8 @@ starting the scraper to get some data to the local database
 7. the longer the spider runs the more data 
 8. If you want to quit crawling press ctrl + c, the spider will stop
 
-Note : Be gentle for the qrl server, as scraping will load their server
-
+## Note 
+Be gentle for the qrl server, as scraping will load their server
 
 If you can't get it to work, please let me know !
 
