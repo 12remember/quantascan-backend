@@ -39,6 +39,9 @@ Looking for help to optimize queries
 ### Heroku changes database credentials every x time(months+) > resulting in failing to store new data
 If you know a way to to prevent this, please let me know
 
+### Verify Data and error handling
+Backend - get insights in data quality and dealing with errors for a better uptime 
+
 
 ### General - Idea's to improve insights or dataflow
 Let me know if you have idea's to improve quantascan.io.
