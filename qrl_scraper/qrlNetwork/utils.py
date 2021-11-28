@@ -22,8 +22,8 @@ if "QRL" in DOCUMENT_DIR and ON_LIVE_SERVER == False:
     connection = psycopg2.connect(host=hostname, user=username, password=password, dbname=database, port=port)
     cur = connection.cursor()
 
-    scrap_url = 'http://127.0.0.1:3000'
-    #scrap_url = 'https://explorer.theqrl.org'
+    #scrap_url = 'http://127.0.0.1:3000'
+    scrap_url = 'https://explorer.theqrl.org'
 
 
 else:

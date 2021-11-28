@@ -28,7 +28,7 @@ NEWSPIDER_MODULE = 'qrlNetwork.spiders'
 
 ON_LIVE_SERVER = False # if set on True, changes etc will be mad on Live Server !!!!
 if "QRL" in DOCUMENT_DIR and ON_LIVE_SERVER == False:
-    hostname = 'localhost'
+    hostname = '127.0.0.1'
     username = 'postgres'
     password = 'postgres' # your password
     database = 'qrl'
@@ -36,8 +36,8 @@ if "QRL" in DOCUMENT_DIR and ON_LIVE_SERVER == False:
     connection = psycopg2.connect(host=hostname, user=username, password=password, dbname=database, port=port)
     cur = connection.cursor()
 
-    scrap_url = 'http://127.0.0.1:3000'
-    #scrap_url = 'https://explorer.theqrl.org'
+    #scrap_url = 'http://127.0.0.1:3000'
+    scrap_url = 'https://explorer.theqrl.org'
 
 
 else:

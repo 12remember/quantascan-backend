@@ -78,13 +78,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'qrlanalytics.wsgi.application'
 
-ON_LIVE_SERVER = True    # if set on True, changes etc will be mad on Live Server !!!!
+ON_LIVE_SERVER = False    # if set on True, changes etc will be mad on Live Server !!!!
 
 if DEBUG == True and ON_LIVE_SERVER == False :
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'qrl',
+            'NAME': 'qrl', #qrl
             'USER': 'postgres',
             'PASSWORD': 'postgres',
             'HOST': 'localhost',
