@@ -56,6 +56,7 @@ class walletDistribution(APIView):
         totalnumber_wallets_with_balance_100 =df_total[df_total['address_balance'] > 99999999999].count()["address_balance"] # 100 quanta
         totalnumber_wallets_with_balance_1000 =df_total[df_total['address_balance'] > 999999999999].count()["address_balance"] # 1000 quanta
         totalnumber_wallets_with_balance_10000 =df_total[df_total['address_balance'] > 9999999999999].count()["address_balance"] # 10000 quanta
+        totalnumber_wallets_with_balance_40000 =df_total[df_total['address_balance'] > 39999999999999].count()["address_balance"] # 40000 quanta
         totalnumber_wallets_with_balance_100000 =df_total[df_total['address_balance'] > 99999999999999].count()["address_balance"] # 100000 quanta
 
         totalnumber_wallets_with_balance_x = [
@@ -65,7 +66,8 @@ class walletDistribution(APIView):
         {'id':4, 'count':totalnumber_wallets_with_balance_100, 'amount':'100'},
         {'id':5, 'count':totalnumber_wallets_with_balance_1000, 'amount':'1.000'},
         {'id':6, 'count':totalnumber_wallets_with_balance_10000, 'amount':'10.000'},
-        {'id':7,'count':totalnumber_wallets_with_balance_100000, 'amount':'100.000'}
+        {'id':7, 'count':totalnumber_wallets_with_balance_40000, 'amount':'40.000'},
+        {'id':8, 'count':totalnumber_wallets_with_balance_100000, 'amount':'100.000'}
         ]
         
         df_total = df_total[df_total['address_balance'] > 0]
@@ -536,12 +538,12 @@ class blockRewardPos(APIView):
     @method_decorator(cache_page(60*60))
     @silk_profile(name='blockRewardPos') 
     def get(self, request, format=None, *args, **kwargs):
-        qs = QrlWalletAddress.objects.values('address_balance').filter(address_balance__gte=10000000000000).order_by('-address_balance') # get al values more then 10k quanta
+        qs = QrlWalletAddress.objects.values('address_balance').filter(address_balance__gte=40000000000000).order_by('-address_balance') # get al values more then 40k quanta
         df = read_frame(qs)
     
         # calculate the number of dilithium keys for every qrl wallet
         df["number_of_quanta"] = df["address_balance"] / 1000000000  # remove shors, keaping whole quanta
-        df["number_of_dilithium_public_key"] = df["number_of_quanta"] / 10000 # divide address balance to 10.000, currently for every whole 10k of quanta you get 1 dilithium public key
+        df["number_of_dilithium_public_key"] = df["number_of_quanta"] / 40000 # divide address balance to 40.000, currently for every whole 40k of quanta you get 1 dilithium public key
         df["number_of_dilithium_public_key"] = df["number_of_dilithium_public_key"].astype(int) # make float > int removing decimals after dot
         df["number_of_dilithium_public_key"] = df["number_of_dilithium_public_key"].where(df["number_of_dilithium_public_key"] <= 100, 100) # current max dilithium public keys per qrl address = 100
         total_dilithium_public_keys = df["number_of_dilithium_public_key"].sum() # total dilithium public keys
