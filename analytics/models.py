@@ -27,7 +27,7 @@ class QrlBlockchainBlocks(models.Model):
     block_added_timestamp = models.DateTimeField(auto_now_add=True)
 
 
-    class Meta:
+    class Meta: 
         managed = True
         db_table = 'qrl_blockchain_blocks'
 

@@ -19,7 +19,7 @@ DOCUMENT_DIR = os.path.join(PROJECT_ROOT, 'Documenten')
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = env('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env.bool('DJANGO_DEBUG', default=False)
+DEBUG = env.bool('DJANGO_DEBUG', default=True)
 
 
 # Application definition
@@ -57,7 +57,7 @@ MIDDLEWARE = [
 ]
 
 
-ROOT_URLCONF = 'qrlanalytics.urls'
+ROOT_URLCONF = 'quantascan.urls'
 
 TEMPLATES = [
     {
@@ -76,18 +76,18 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'qrlanalytics.wsgi.application'
+WSGI_APPLICATION = 'quantascan.wsgi.application'
 
-ON_LIVE_SERVER = False    # if set on True, changes etc will be mad on Live Server !!!!
+ON_LIVE_SERVER = True    # if set on True, changes etc will be mad on Live Server !!!!
 
 if DEBUG == True and ON_LIVE_SERVER == False :
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'qrl', #qrl
+            'NAME': 'quantascan', #qrl
             'USER': 'postgres',
             'PASSWORD': 'postgres',
-            'HOST': 'localhost',
+            'HOST': '127.0.0.1',
             'PORT': '5432',
         }
     }
@@ -113,8 +113,8 @@ elif DEBUG == True and ON_LIVE_SERVER == True :
     ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'analytics.quantascan.io','quantascan.io','.quantascan.io']
     CORS_ORIGIN_ALLOW_ALL = True
     CSP_REPORT_ONLY= True
-    SILKY_AUTHENTICATION = False  # User must login
-    SILKY_AUTHORISATION = False  # User must have permissions
+    #SILKY_AUTHENTICATION = False  # User must login
+    SILKY_AUTHORISATION = True  # User must have permissions
     
 else:
     DATABASES = {
