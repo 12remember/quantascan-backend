@@ -392,7 +392,6 @@ class walletData2(APIView):
                     "block_found_datetime":rows.block_found_datetime} 
                 list_top_transactions_receiving.append(data_point_row) 
 
-
             df_transaction["number_of_transactions"] = ''
             most_sending_wallets = df_transaction.pivot_table(index=['transaction_sending_wallet_address'],aggfunc={'number_of_transactions':'size', 'transaction_amount_send':'sum'}).head(100).sort_values('number_of_transactions', ascending=False).reset_index('transaction_sending_wallet_address')
             most_receiving_wallets = df_transaction.pivot_table(index=['transaction_receiving_wallet_address'], aggfunc={'number_of_transactions':'size', 'transaction_amount_send':'sum'}).head(100).sort_values('number_of_transactions', ascending=False).reset_index('transaction_receiving_wallet_address')
@@ -426,7 +425,7 @@ class walletData2(APIView):
             df_transaction.loc[df_transaction.transaction_sending_wallet_address == wallet, 'transaction_amount_send'] = df_transaction.transaction_amount_send* -1 # if wallet is sending then substract value of transaction amount
             s = pd.to_datetime(df_transaction['block_found_datetime'], unit='s')          
             df_transaction['date']=s.dt.floor('d')
-             
+ 
             df_grouped = df_transaction.groupby(['date'],).agg({'transaction_amount_send': ['sum',]})
             df_grouped.columns = ["_".join(x) for x in df_grouped.columns.ravel()]
         
@@ -436,7 +435,8 @@ class walletData2(APIView):
         
             s = pd.Series(df_grouped["date"])        
             df_grouped.index = pd.DatetimeIndex(s.index)        
-            df_grouped = df_grouped.reindex(idx, fill_value=0)
+            df_grouped = df_grouped.reindex(idx)
+            df_grouped.fillna(0, inplace=True)
             
             s_transactions = pd.Series(df_grouped['transaction_amount_send_sum'])
             df_grouped["wallet_value_total_daily"] = s_transactions.cumsum()
