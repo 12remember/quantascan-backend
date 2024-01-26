@@ -56,6 +56,7 @@ How to run Quantascan - backend Locally
 1. Create a map witht he name "QRL" !important
 2. Clone backend and frontend to the "QRL" map
 3. Check if map structure is :
+
 ___ QRL 
 _____ quantascan-backend 
 _____ quantascan-frontend
@@ -67,11 +68,13 @@ _____ quantascan-frontend
 2.  Run postgresql 12
 
 3. Credential for local use:
+```python
     hostname = '127.0.0.1'
     username = 'postgres'
     password = 'postgres' # your password
     database = 'qrl'
     port = '5432'
+```  
 
 4.  Start the server
 5.  Check if you can access the database with a program like [pgadmin](https://www.pgadmin.org/"pgadmin") 

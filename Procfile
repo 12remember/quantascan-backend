@@ -1,1 +1,1 @@
-web: gunicorn qrlanalytics.wsgi
+web: gunicorn quantascan.wsgi
