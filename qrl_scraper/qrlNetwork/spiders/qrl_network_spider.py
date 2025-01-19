@@ -38,9 +38,16 @@ class QRLNetworkSpider(scrapy.Spider):
     def start_requests(self):
         self.crawler.stats.set_value("spiderName", self.name)
         self.crawler.stats.set_value("spiderVersion", self.version)
-                    
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Referer": "https://example.com",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }                 
         yield scrapy.Request(
             url='https://explorer.theqrl.org/api/blockheight',
+            headers=headers,
             callback=self.parse,
             errback=self.errback_conn,
             #meta={"item": item},
