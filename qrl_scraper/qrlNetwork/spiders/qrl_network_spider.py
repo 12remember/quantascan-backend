@@ -361,37 +361,42 @@ class QRLNetworkSpider(scrapy.Spider):
             
     def errback_conn(self, failure):
         item_missed = QRLNetworkMissedItem()
-                        
+
         item_missed["spider_name"] = self.name
         item_missed["spider_version"] = self.version
         item_missed["location_script_file"] = str(__name__)
-        item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
-        
+        item_missed["location_script_function"] = str(__class__.__name__) + ', ' + str(sys._getframe().f_code.co_name)
+
+        # Handle HTTP errors
         if failure.check(HttpError):
-
+            response = failure.value.response
             item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.value.response).split(" ")
-            item_missed["item_url"] = failVal[1]
-            item_missed["trace_back"] = failVal[0]
+            item_missed["error_type"] = str(response.status)  # Extract HTTP status code
+            item_missed["item_url"] = response.url  # Extract URL from the response
+            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
 
             yield QRLNetworkMissedItem(item_missed)
-            
+
+        # Handle DNS lookup errors
         elif failure.check(DNSLookupError):
-
+            request = failure.request
             item_missed["error"] = str(failure.__class__)
-            item_missed["errorType"] = str(failure.request).split(" ")
-            item_missed["item_url"] = failVal[1]
-            item_missed["trace_back"] = failVal[0]
-            
+            item_missed["error_type"] = "DNSLookupError"
+            item_missed["item_url"] = request.url  # Extract URL from the request
+            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
+
             yield QRLNetworkMissedItem(item_missed)
 
+        # Handle timeout errors
         elif failure.check(TimeoutError, TCPTimedOutError):
+            request = failure.request
             item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.request).split(" ")
-            item_missed["item_url"] = failVal[1]
-            item_missed["trace_back"] = failVal[0]      
-            
+            item_missed["error_type"] = "TimeoutError"
+            item_missed["item_url"] = request.url  # Extract URL from the request
+            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
+
             yield QRLNetworkMissedItem(item_missed)
+
         
                   
 #def spiderError(missedIn,itemError, itemErrorType, fileName,itemUrl, missedItemType):
