@@ -124,16 +124,16 @@ class QrlnetworkPipeline_transaction:
                     "transaction_found", "transaction_result","spider_name", \
                     "spider_version" , "master_addr_type", "master_addr_data",\
                     "master_addr_fee","public_key_type","public_key_data",\
-                    "signature_type","signature_data", "transaction_nonce",\
+                    "signature_type","transaction_nonce",\
                     "transaction_addrs_to_type", "block_found_datetime",\
                     "transaction_added_datetime" \
-                    ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', 
+                    ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', 
                     (item['transaction_hash'], item['transaction_sending_wallet_address'],item['transaction_receiving_wallet_address'], 
                     int(item["transaction_amount_send"]), item["transaction_type"], int(item["transaction_block_number"]), 
                     item["transaction_found"],item["transaction_result"], item["spider_name"],
                     item["spider_version"],item["master_addr_type"],item["master_addr_data"],
                     item["master_addr_fee"], item["public_key_type"], item["public_key_data"], 
-                    item["signature_type"], item["signature_data"], item["transaction_nonce"],
+                    item["signature_type"], item["transaction_nonce"],
                     item["transaction_addrs_to_type"], convert_timestamp_to_datetime, datetimeNow ))
 
                     connection.commit()

@@ -50,7 +50,6 @@ class QRLNetworkTransactionItem(scrapy.Item):
     public_key_type = scrapy.Field()
     public_key_data = scrapy.Field()
     signature_type = scrapy.Field()
-    signature_data = scrapy.Field()
     transaction_nonce = scrapy.Field()
     transaction_addrs_to_type = scrapy.Field()
 

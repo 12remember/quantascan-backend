@@ -52,7 +52,6 @@ class QrlBlockchainTransactions(models.Model):
     public_key_type = models.CharField(max_length=50000, blank=True, null=True)
     public_key_data = models.CharField(max_length=50000, blank=True, null=True)
     signature_type = models.CharField(max_length=50000, blank=True, null=True)
-    signature_data = models.CharField(max_length=50000, blank=True, null=True)
     transaction_nonce = models.IntegerField(blank=True, null=True)
     transaction_addrs_to_type = models.CharField(max_length=50000, blank=True, null=True)
 

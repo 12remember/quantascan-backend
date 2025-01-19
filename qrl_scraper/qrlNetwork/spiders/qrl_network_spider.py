@@ -200,7 +200,6 @@ class QRLNetworkSpider(scrapy.Spider):
             # transaction >  tx  > signature 
             signature = transaction_tx["signature"]
             item_transaction["signature_type"] = signature["type"]
-            item_transaction["signature_data"]  = list_integer_to_hex(signature["data"])
 
             
             
