@@ -180,11 +180,16 @@ class QRLNetworkSpider(scrapy.Spider):
             item_transaction["block_found_datetime"] = item_block["block_found_datetime"]
             item_transaction["block_found_timestamp_seconds"] = item_block["block_found_timestamp_seconds"]
             
-            # transaction >  tx  
+            # transaction >  tx
             transaction_tx = transaction["tx"]
             item_transaction["transaction_type"] = transaction_tx["transactionType"]
             item_transaction["transaction_nonce"] = int(transaction_tx["nonce"])
-            item_transaction["master_addr_fee"]  =  int(transaction_tx["fee"])
+
+            # Use float for fees or scale to integer if needed
+            try:
+                item_transaction["master_addr_fee"] = float(transaction_tx["fee"])  # Or use scaling if required
+            except ValueError:
+                item_transaction["master_addr_fee"] = None  # Default value for invalid data
             
             # transaction >  tx  > master_addr
             master_addr = transaction_tx["master_addr"]
