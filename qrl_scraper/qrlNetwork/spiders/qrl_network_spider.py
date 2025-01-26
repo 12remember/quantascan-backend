@@ -2,26 +2,21 @@ import os
 import scrapy
 import logging
 import re
+
+import logging
 import psycopg2
 import json
-import marshal
-import numpy as np
-import pandas as pd
-import sys
 import traceback
-
-
+import sys
 from scrapy.spidermiddlewares.httperror import HttpError
-from twisted.internet.error import DNSLookupError
-from twisted.internet.error import TimeoutError, TCPTimedOutError
-
-
-from ..items import QRLNetworkBlockItem, QRLNetworkTransactionItem, QRLNetworkAddressItem, QRLNetworkMissedItem
+from twisted.internet.error import DNSLookupError, TimeoutError, TCPTimedOutError
 from ..settings import connection , cur, scrap_url
+from ..items import QRLNetworkBlockItem, QRLNetworkTransactionItem, QRLNetworkAddressItem, QRLNetworkMissedItem
 
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DOCUMENT_DIR = os.path.join(PROJECT_ROOT, 'Documenten')
+
 
 
 def list_integer_to_hex(list):
@@ -33,57 +28,110 @@ def list_integer_to_hex(list):
 class QRLNetworkSpider(scrapy.Spider):
     name = "qrl_network_spider"
     version = "0.25"
-    start_urls = []
+    start_urls = ["https://zeus-proxy.automated.theqrl.org/grpc/mainnet/GetNodeState"]
+
+    def __init__(self, retry='', *args, **kwargs):
+        super(QRLNetworkSpider, self).__init__(*args, **kwargs)
+        self.retry = retry  # Activate retry mode if specified
 
     def start_requests(self):
-        self.crawler.stats.set_value("spiderName", self.name)
-        self.crawler.stats.set_value("spiderVersion", self.version)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Referer": "https://explorer.theqrl.org",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Connection": "keep-alive",
-            "X-Requested-With": "XMLHttpRequest",
-        }                 
-        yield scrapy.Request(
-            url='https://explorer.theqrl.org/api/blockheight',
-            headers=headers,
-            callback=self.parse,
-            errback=self.errback_conn,
-            #meta={"item": item},
-        )
+        """Start requests based on mode (normal or retry)."""
+        if self.retry == 'transactions':
+            # Retry mode for failed transactions
+            self.logger.info("Retry mode: Fetching failed transactions.")
+            failed_urls = self.get_failed_urls()
+            if not failed_urls:
+                self.logger.info("No failed transactions found. Exiting retry mode.")
+                return
 
+            for url in failed_urls:
+                yield scrapy.Request(
+                    url=url,
+                    callback=self.parse_transaction,
+                    errback=self.errback_conn,
+                    meta={"retry_mode": self.retry}
+                )
+        else:
+            # Normal spider behavior
+            self.logger.info("Normal mode: Starting with default start_urls.")
+            for url in self.start_urls:
+                yield scrapy.Request(
+                    url=url,
+                    callback=self.parse,
+                    errback=self.errback_conn
+                )
+
+    def get_failed_urls(self):
+        """Fetch failed transactions from the database."""
+        try:
+            cur.execute('SELECT item_url FROM public."qrl_blockchain_missed_items" WHERE item_url LIKE %s', ["%/tx/%"])
+            failed_urls = [row[0] for row in cur.fetchall()]
+            self.logger.info(f"Found {len(failed_urls)} failed transactions.")
+            return failed_urls
+        except psycopg2.Error as e:
+            self.logger.error(f"Database error in get_failed_urls: {e}")
+            return []
+
+    def remove_error(self, url):
+        """Remove a processed error from the database."""
+        try:
+            cur.execute('DELETE FROM public."qrl_blockchain_missed_items" WHERE item_url = %s', [url])
+            connection.commit()  # Ensure the change is committed to the database
+            self.logger.info(f"Removed error for URL: {url}")
+        except psycopg2.Error as e:
+            self.logger.error(f"Database error in remove_error: {e}")
+            connection.rollback()  # Roll back the transaction in case of an error
 
 
     def parse(self, response):
-        json_response = json.loads(response.body)
+        try:
+            json_response = json.loads(response.body)
+            current_block_height = int(json_response["info"]["block_height"])
 
-        cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks" ORDER BY "block_number" DESC LIMIT 1')     
-        block_in_database = cur.fetchone()
-        if block_in_database != None: 
-            last_block_scraped = int(block_in_database[0]) # check latest block in data base
-        else:
-            last_block_scraped = 0
-        
-        diff_with_current_blockheight = abs(json_response["blockheight"] - last_block_scraped) # calculate difference between latest block and block in database
+            # Fetch the highest block number and total row count from the database
+            cur.execute('SELECT MAX("block_number") FROM public."qrl_blockchain_blocks"')
+            highest_block_in_db = cur.fetchone()[0] or 0
 
-        if json_response["found"] == True and diff_with_current_blockheight != 0 :      
-            for number in range(last_block_scraped+1,json_response["blockheight"]+1 ): #last_block_scraped,json_response["blockheight"]+1
-            #cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks" ORDER BY "block_number" ASC') 
-            #listA = [item[0] for item in cur.fetchall()]
-            #res = [x for x in range(listA[0], listA[-1]+1) if x not in listA]
-            #print(res)
-            #for number in res:
-            #for number in range(1212497,1263495):
-                block_api_url = scrap_url + '/api/block/' + str(number)
+            cur.execute('SELECT COUNT(*) FROM public."qrl_blockchain_blocks"')
+            total_rows_in_db = cur.fetchone()[0]
+
+            self.logger.info(f"Current block height: {current_block_height}, Highest block in DB: {highest_block_in_db}, Rows in DB: {total_rows_in_db}")
+
+            # Check for gaps only if there's a significant discrepancy
+            if highest_block_in_db - total_rows_in_db > 10:
+                self.logger.info("Significant discrepancy found, checking for gaps...")
+                cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks" ORDER BY "block_number" ASC')
+                existing_blocks = set(row[0] for row in cur.fetchall())
+
+                # Generate the expected range and identify missing blocks
+                expected_blocks = set(range(0, highest_block_in_db + 1))
+                missing_blocks = sorted(expected_blocks - existing_blocks)
+                self.logger.info(f"Gaps identified: {missing_blocks}")
+
+                # Scrape missing blocks
+                for block_number in missing_blocks:
+                    self.logger.info(f"Fetching missing block number: {block_number}")
+                    yield scrapy.Request(
+                        url=scrap_url + '/api/block/' + str(block_number),
+                        callback=self.parse_block,
+                        errback=self.errback_conn,
+                        meta={"block_number": block_number},
+                    )
+
+            # Always scrape the highest block number in the DB and the current block height
+            for block_number in range(highest_block_in_db + 1, current_block_height + 1):
+                self.logger.info(f"Fetching block number: {block_number}")
                 yield scrapy.Request(
-                    url=block_api_url,
+                    url=scrap_url + '/api/block/' + str(block_number),
                     callback=self.parse_block,
                     errback=self.errback_conn,
-                    #meta={"item": item},
+                    meta={"block_number": block_number},
                 )
+
+        except (Exception) as error:
+            self.logger.error(f"Error in parse: {error}")
+            self.handle_error(response, error)
+
 
 
     def parse_block(self, response):
@@ -153,23 +201,13 @@ class QRLNetworkSpider(scrapy.Spider):
                 pass
        
         except (Exception) as error:
-            item_missed = QRLNetworkMissedItem()
-            
-            item_missed["spider_name"] = self.name
-            item_missed["spider_version"] = self.version
-            item_missed["location_script_file"] = str(__name__)
-            item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
-            item_missed["trace_back"] = traceback.format_exc(limit=None, chain=True)
-            item_missed["error_type"] = str(type(error))
-            item_missed["error"] = str(error)
-            item_missed["item_url"] = response.url
-
-            yield QRLNetworkMissedItem(item_missed)   
+            self.logger.error(f"Error in parse_block: {error}")
+            self.handle_error(response, error)
        
             
             
     def parse_transaction(self, response):
-        item_block = response.meta['item_block']
+        
         item_transaction = QRLNetworkTransactionItem()
         json_response = json.loads(response.body)
         item_transaction["item_url"]=response.url
@@ -185,20 +223,22 @@ class QRLNetworkSpider(scrapy.Spider):
             
             # transaction >  header 
             transaction_header = transaction["header"]
-            item_transaction["transaction_block_number"] = item_block["block_number"]
-            item_transaction["block_found_datetime"] = item_block["block_found_datetime"]
-            item_transaction["block_found_timestamp_seconds"] = item_block["block_found_timestamp_seconds"]
+            # Reconstruct item_block directly from the JSON response
+            reconstructed_item_block = {
+                "block_number": int(transaction_header["block_number"]),
+                "block_found_datetime": int(transaction_header["timestamp_seconds"]),
+                "block_found_timestamp_seconds": int(transaction_header["timestamp_seconds"]),
+            }
+
+            item_transaction["transaction_block_number"] = reconstructed_item_block["block_number"]
+            item_transaction["block_found_datetime"] = reconstructed_item_block["block_found_datetime"]
+            item_transaction["block_found_timestamp_seconds"] = reconstructed_item_block["block_found_timestamp_seconds"]
             
-            # transaction >  tx
+            # transaction >  tx  
             transaction_tx = transaction["tx"]
             item_transaction["transaction_type"] = transaction_tx["transactionType"]
             item_transaction["transaction_nonce"] = int(transaction_tx["nonce"])
 
-            # Use float for fees or scale to integer if needed
-            try:
-                item_transaction["master_addr_fee"] = float(transaction_tx["fee"])  # Or use scaling if required
-            except ValueError:
-                item_transaction["master_addr_fee"] = None  # Default value for invalid data
             
             # transaction >  tx  > master_addr
             master_addr = transaction_tx["master_addr"]
@@ -303,21 +343,13 @@ class QRLNetworkSpider(scrapy.Spider):
 
                     yield QRLNetworkTransactionItem(item_transaction)
        
-                                            
+            
+            if self.retry == 'transactions':
+                self.remove_error(response.url)                             
             
         except (Exception) as error:        
-            item_missed = QRLNetworkMissedItem()
-            
-            item_missed["spider_name"] = self.name
-            item_missed["spider_version"] = self.version
-            item_missed["location_script_file"] = str(__name__)
-            item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
-            item_missed["trace_back"] = traceback.format_exc(limit=None, chain=True)
-            item_missed["error_type"] = str(type(error))
-            item_missed["error"] = str(error)
-            item_missed["item_url"] = response.url
-
-            yield QRLNetworkMissedItem(item_missed)   
+            self.logger.error(f"Error in parse_transaction: {error}")
+            self.handle_error(response, error)
             
 
     def parse_address(self, response):
@@ -336,7 +368,7 @@ class QRLNetworkSpider(scrapy.Spider):
             item_address["wallet_address"] = json_state["address"]
             item_address["address_balance"] = json_state["balance"]
             item_address["address_nonce"] = json_state["nonce"]
-            item_address["address_ots_bitfield_used_page"] = json_state["ots_bitfield_used_page"]
+            item_address["address_ots_bitfield_used_page"] = json_state.get("ots_bitfield_used_page", None)
             item_address["address_used_ots_key_count"] = json_state["used_ots_key_count"]
             item_address["address_transaction_hash_count"] = json_state["transaction_hash_count"]
             item_address["address_tokens_count"] = json_state["tokens_count"]
@@ -359,79 +391,62 @@ class QRLNetworkSpider(scrapy.Spider):
 
 
         except (Exception) as error:
-            item_missed = QRLNetworkMissedItem()
-            
-            item_missed["spider_name"] = self.name
-            item_missed["spider_version"] = self.version
-            item_missed["location_script_file"] = str(__name__)
-            item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
-            item_missed["trace_back"] = traceback.format_exc(limit=None, chain=True)
-            item_missed["error_type"] = str(type(error))
-            item_missed["error"] = str(error)
-            item_missed["item_url"] = response.url
+            self.logger.error(f"Error in parse_address: {error}")
+            self.handle_error(response, error)   
 
-            yield QRLNetworkMissedItem(item_missed)         
-            
-            
-    def errback_conn(self, failure):
+
+    def handle_error(self, response, error):
+        """Algemene foutafhandelingsfunctie."""
+        self.logger.error(f"Error encountered: {error} at {response.url}")
         item_missed = QRLNetworkMissedItem()
 
         item_missed["spider_name"] = self.name
         item_missed["spider_version"] = self.version
         item_missed["location_script_file"] = str(__name__)
-        item_missed["location_script_function"] = str(__class__.__name__) + ', ' + str(sys._getframe().f_code.co_name)
+        item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
+        item_missed["trace_back"] = traceback.format_exc(limit=None, chain=True)
+        item_missed["error_type"] = str(type(error))
+        item_missed["error"] = str(error)
+        item_missed["item_url"] = response.url
 
-        # Handle HTTP errors
-        if failure.check(HttpError):
-            response = failure.value.response
-            item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(response.status)  # Extract HTTP status code
-            item_missed["item_url"] = response.url  # Extract URL from the response
-            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
+        yield item_missed
 
-            yield QRLNetworkMissedItem(item_missed)
-
-        # Handle DNS lookup errors
-        elif failure.check(DNSLookupError):
-            request = failure.request
-            item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = "DNSLookupError"
-            item_missed["item_url"] = request.url  # Extract URL from the request
-            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
-
-            yield QRLNetworkMissedItem(item_missed)
-
-        # Handle timeout errors
-        elif failure.check(TimeoutError, TCPTimedOutError):
-            request = failure.request
-            item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = "TimeoutError"
-            item_missed["item_url"] = request.url  # Extract URL from the request
-            item_missed["trace_back"] = str(failure.getTraceback())  # Extract traceback
-
-            yield QRLNetworkMissedItem(item_missed)
-
-        
-                  
-#def spiderError(missedIn,itemError, itemErrorType, fileName,itemUrl, missedItemType):
-#    cur = connection.cursor()
-#    error_timestamp = datetime.now()
-    
-#    try:
-#        cur.execute('INSERT INTO public. "qrl_blockchain_missed_items" (\
-#        "spider_name","spider_version", "missed_in",\
-#        "item_error", "item_error_type", "file_name", "item_url",\
-#        "missed_item_type", "error_timestamp"\
-#        ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s, %s)', (
-#        QRLNetworkSpider.name,QRLNetworkself.version,missedIn,itemError,itemErrorType,fileName, itemUrl, missedItemType,error_timestamp))
-
-#        connection.commit()
-#        logging.warning('Got ERROR - check db')
-
-#    except Exception as error:
-#        connection.rollback()        
             
-       
-# self.crawler.engine.close_spider(self, 'log message')
+    def errback_conn(self, failure):
+        item_missed = QRLNetworkMissedItem()
+                        
+        item_missed["spider_name"] = self.name
+        item_missed["spider_version"] = self.version
+        item_missed["location_script_file"] = str(__name__)
+        item_missed["location_script_function"] = str(__class__.__name__) + (', ') + str(sys._getframe().f_code.co_name)
+        
+        if failure.check(HttpError):
+
+            item_missed["error"] = str(failure.__class__)
+            item_missed["error_type"] = str(failure.value.response).split(" ")
+            item_missed["item_url"] = failVal[1]
+            item_missed["trace_back"] = failVal[0]
+
+            yield QRLNetworkMissedItem(item_missed)
+            
+        elif failure.check(DNSLookupError):
+
+            item_missed["error"] = str(failure.__class__)
+            item_missed["errorType"] = str(failure.request).split(" ")
+            item_missed["item_url"] = failVal[1]
+            item_missed["trace_back"] = failVal[0]
+            
+            yield QRLNetworkMissedItem(item_missed)
+
+        elif failure.check(TimeoutError, TCPTimedOutError):
+            item_missed["error"] = str(failure.__class__)
+            item_missed["error_type"] = str(failure.request).split(" ")
+            item_missed["item_url"] = failVal[1]
+            item_missed["trace_back"] = failVal[0]      
+            
+            yield QRLNetworkMissedItem(item_missed)
 
 
+
+# run : scrapy crawl qrl_network_spider
+# run retry failed transactions : scrapy crawl qrl_network_spider -a retry=transactions

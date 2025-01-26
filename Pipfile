@@ -1,17 +1,12 @@
 [[source]]
-
 url = "https://pypi.python.org/simple"
 verify_ssl = true
 name = "pypi"
 
-
 [requires]
-
-python_version = "3.9"
-
+python_version = "3.11"
 
 [packages]
-
 "psycopg2-binary" = "*"
 django-heroku = "*"
 gunicorn = "*"
@@ -21,7 +16,12 @@ django-pandas = "*"
 django-cors-headers = "*"
 django-environ="*"
 django-csp = "*"
-django-silk="*"
 scrapy ="*"
+grpcio = "*"
+grpcio-tools = "*"
+setuptools = "*"
+wheel = "*"
+dj-database-url = "*"
+django-debug-toolbar = "*"
 
 [dev-packages]

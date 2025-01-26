@@ -3,6 +3,7 @@ import os
 import dj_database_url
 import django_heroku
 import environ
+import dj_database_url
 
 env = environ.Env()
 # reading .env file
@@ -37,7 +38,7 @@ INSTALLED_APPS = [
     'analytics',
     'rest_framework',
     'corsheaders',
-    'silk',
+
 ]
 
 MIDDLEWARE = [
@@ -45,7 +46,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'silk.middleware.SilkyMiddleware',
+
     'corsheaders.middleware.CorsMiddleware',
     'csp.middleware.CSPMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -94,10 +95,7 @@ if DEBUG == True and ON_LIVE_SERVER == False :
     ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'analytics.quantascan.io']
     CORS_ORIGIN_ALLOW_ALL = True
     CSP_REPORT_ONLY= True
-    # Silky
-    SILKY_AUTHENTICATION = False  # User must login
-    SILKY_AUTHORISATION = False  # User must have permissions
-    
+
 
 elif DEBUG == True and ON_LIVE_SERVER == True :
     DATABASES = {
@@ -113,19 +111,13 @@ elif DEBUG == True and ON_LIVE_SERVER == True :
     ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'analytics.quantascan.io','quantascan.io','.quantascan.io']
     CORS_ORIGIN_ALLOW_ALL = True
     CSP_REPORT_ONLY= True
-    #SILKY_AUTHENTICATION = False  # User must login
-    SILKY_AUTHORISATION = True  # User must have permissions
+
     
 else:
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': env('DATABASE_NAME'),
-            'USER': env('DATABASE_USER'),
-            'PASSWORD': env('DATABASE_PASSWORD'),
-            'HOST': env('DATABASE_HOST'),
-            'PORT': env('DATABASE_PORT'),
-        } 
+        'default': dj_database_url.config(
+            default=os.getenv("DATABASE_URL")  # Fetch DATABASE_URL from environment
+        )
     }
     
     # removes DRF Browsable api layout
@@ -169,8 +161,7 @@ else:
     # Honor the 'X-Forwarded-Proto' header for request.is_secure()
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-    SILKY_AUTHENTICATION = True  # User must login
-    SILKY_AUTHORISATION = True  # User must have permissions
+
 
 
 

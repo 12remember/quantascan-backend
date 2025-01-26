@@ -114,34 +114,60 @@ class QrlnetworkPipeline_transaction:
         if valid:
             try:
                 datetimeNow = datetime.now()
-                cur.execute('SELECT "transaction_hash" FROM public."qrl_blockchain_transactions" WHERE "transaction_hash" = %s AND "transaction_receiving_wallet_address" = %s', (item['transaction_hash'], item['transaction_receiving_wallet_address']))
+                # Check for duplicates
+                cur.execute(
+                    'SELECT "transaction_hash" FROM public."qrl_blockchain_transactions" WHERE "transaction_hash" = %s AND "transaction_receiving_wallet_address" = %s',
+                    (item.get('transaction_hash'), item.get('transaction_receiving_wallet_address'))
+                )
                 dup_check = len(cur.fetchall())
-                if dup_check == 0: 
-                    convert_timestamp_to_datetime = datetime.fromtimestamp(int(item["block_found_datetime"])).strftime("%Y-%m-%d %H:%M:%S")
-                    cur.execute('INSERT INTO public. "qrl_blockchain_transactions" (\
-                    "transaction_hash", "transaction_sending_wallet_address", "transaction_receiving_wallet_address",\
-                    "transaction_amount_send", "transaction_type", "transaction_block_number",\
-                    "transaction_found", "transaction_result","spider_name", \
-                    "spider_version" , "master_addr_type", "master_addr_data",\
-                    "master_addr_fee","public_key_type","public_key_data",\
-                    "signature_type","transaction_nonce",\
-                    "transaction_addrs_to_type", "block_found_datetime",\
-                    "transaction_added_datetime" \
-                    ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', 
-                    (item['transaction_hash'], item['transaction_sending_wallet_address'],item['transaction_receiving_wallet_address'], 
-                    int(item["transaction_amount_send"]), item["transaction_type"], int(item["transaction_block_number"]), 
-                    item["transaction_found"],item["transaction_result"], item["spider_name"],
-                    item["spider_version"],item["master_addr_type"],item["master_addr_data"],
-                    item["master_addr_fee"], item["public_key_type"], item["public_key_data"], 
-                    item["signature_type"], item["transaction_nonce"],
-                    item["transaction_addrs_to_type"], convert_timestamp_to_datetime, datetimeNow ))
 
+                if dup_check == 0:
+                    # Convert timestamp to datetime format
+                    convert_timestamp_to_datetime = datetime.fromtimestamp(
+                        int(item.get("block_found_datetime", 0))
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+
+                    # Prepare the INSERT query
+                    cur.execute(
+                        'INSERT INTO public."qrl_blockchain_transactions" ('
+                        '"transaction_hash", "transaction_sending_wallet_address", "transaction_receiving_wallet_address", '
+                        '"transaction_amount_send", "transaction_type", "transaction_block_number", '
+                        '"transaction_found", "transaction_result", "spider_name", '
+                        '"spider_version", "master_addr_type", "master_addr_data", '
+                        '"master_addr_fee", "public_key_type", "public_key_data", '
+                        '"signature_type", "transaction_nonce", '
+                        '"transaction_addrs_to_type", "block_found_datetime", '
+                        '"transaction_added_datetime"'
+                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                        (
+                            item.get('transaction_hash'),
+                            item.get('transaction_sending_wallet_address'),
+                            item.get('transaction_receiving_wallet_address'),
+                            int(item.get("transaction_amount_send", 0)),  # Use default value if missing
+                            item.get("transaction_type"),
+                            int(item.get("transaction_block_number", 0)),
+                            item.get("transaction_found"),
+                            item.get("transaction_result"),
+                            item.get("spider_name"),
+                            item.get("spider_version"),
+                            item.get("master_addr_type"),
+                            item.get("master_addr_data"),
+                            item.get("master_addr_fee"),
+                            item.get("public_key_type"),
+                            item.get("public_key_data"),
+                            item.get("signature_type"),
+                            item.get("transaction_nonce"),
+                            item.get("transaction_addrs_to_type"),
+                            convert_timestamp_to_datetime,
+                            datetimeNow,
+                        )
+                    )
                     connection.commit()
-                    logging.warning('Got new transaction, hash: %s ' % item['transaction_hash'])        
+                    logging.warning('Got new transaction, hash: %s ' % item['transaction_hash'])
+
                 else:
-                    raise DropItem("Already Got Transaction: %s" % item['transaction_hash'])
-
-
+                    raise DropItem(f"Already got transaction: {item['transaction_hash']}")
+                
             except DropItem as duplicate :
                 logging.info(duplicate)
                 

@@ -19,15 +19,44 @@ from django_pandas.io import read_frame
 import datetime as dt
 from datetime import date, timedelta
 
-from silk.profiling.profiler import silk_profile
+
 from .models import *
 from .serializers import *
 import numpy as np 
+from django.db.models import Max
+
+class BlockStatisticsView(APIView):
+    @method_decorator(cache_page(5 * 60))
+    def get(self, request, format=None):
+        # Get the highest block number
+        highest_block_number = QrlBlockchainBlocks.objects.aggregate(
+            max_block_number=Max('block_number')
+        )['max_block_number']
+
+        # Get total rows in the database
+        total_rows = QrlBlockchainBlocks.objects.count()
+
+        # Calculate compliance percentage based on total possible blocks
+        compliance_percentage = (
+            round((total_rows / highest_block_number * 100), 2)
+            if highest_block_number > 0 else 0
+        )
+
+        # Calculate missing blocks
+        missing_blocks = (highest_block_number - total_rows) if highest_block_number and total_rows else 0
+
+        # Return the results
+        return Response({
+            'highest_block_number': highest_block_number,
+            'total_rows': total_rows,
+            'compliance_percentage': compliance_percentage,
+            'missing_blocks': missing_blocks,
+        })
+
 
 
 class walletRichList(APIView):
     @method_decorator(cache_page(5*60))
-    @silk_profile(name='walletRichList') 
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlWalletAddress.objects.values('wallet_address', 'address_balance', 'wallet_custom_name','address_first_found', 'wallet_type').annotate(rank=Window(expression=Rank(),order_by=F('address_balance').desc()))[:500]   
         df_total = read_frame(qs)
@@ -43,7 +72,6 @@ class walletRichList(APIView):
 
 class walletDistribution(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='walletDistribution')
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlWalletAddress.objects.values('address_balance').annotate(rank=Window(expression=Rank(),order_by=F('address_balance').desc()))                
         df_total = read_frame(qs)
@@ -107,7 +135,6 @@ class walletDistribution(APIView):
         
 class walletNumberOfWallets(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='walletNumberOfWallets')
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlWalletAddress.objects.all()        
         df = read_frame(qs)
@@ -142,7 +169,6 @@ class walletNumberOfWallets(APIView):
 
 class blockBlockSize(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='blockBlockSize')
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlAggregatedBlockData.objects.values('date','block_size_mean', 'block_size_min', 'block_size_max', 'block_timestamp_seconds_max').order_by('date')
         df_total = read_frame(qs)
@@ -172,7 +198,6 @@ class blockBlockSize(APIView):
 
 class blockBlockTime(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='blockBlockTime')
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlAggregatedBlockData.objects.values('date','block_number_count', 'block_timestamp_seconds_mean', 'block_timestamp_seconds_min', 'block_timestamp_seconds_max').order_by('date')      
         df_total = read_frame(qs)
@@ -197,7 +222,6 @@ class blockBlockTime(APIView):
 
 class networkTransactions(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='networkTransactions')
     def get(self, request, format=None, *args, **kwargs):
 
         qs = QrlAggregatedTransactionData.objects.values('date','total_number_of_transactions', 'total_amount_transfered', 'transaction_type', 'total_blocks_found').order_by('date')      
@@ -258,8 +282,7 @@ class networkTransactions(APIView):
         
    
 class networkTotalCirculatingQuanta(APIView):
-    @method_decorator(cache_page(60*60))
-    @silk_profile(name='networkTotalCirculatingQuanta')        
+    @method_decorator(cache_page(60*60))    
     def get(self, request, format=None, *args, **kwargs):
 
         qs = QrlAggregatedBlockData.objects.values('date','block_reward_block_sum').order_by('date') 
@@ -284,8 +307,7 @@ class networkTotalCirculatingQuanta(APIView):
         })
 
 class networkTransactionFee(APIView):
-    @method_decorator(cache_page(60*60))
-    @silk_profile(name='networkTransactionFee')         
+    @method_decorator(cache_page(60*60))      
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlAggregatedTransactionData.objects.filter(transaction_type__exact='transfer').order_by('date') # in db there is a daily row for each transaction type. to calculate average transaction fee only type 'transfer' is selected      
         df_total = read_frame(qs)
@@ -310,8 +332,7 @@ class networkTransactionFee(APIView):
         })
 
 class networkUniqueWalletsUsed(APIView):
-    @method_decorator(cache_page(60*60))
-    @silk_profile(name='networkUniqueWalletsUsed')        
+    @method_decorator(cache_page(60*60))       
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlAggregatedTransactionData.objects.all()      
         df_total = read_frame(qs)
@@ -335,7 +356,6 @@ class networkUniqueWalletsUsed(APIView):
 
 class walletData(APIView):
     @method_decorator(cache_page(5*60))
-    @silk_profile(name='walletData') 
     def get(self, request, format=None, *args, **kwargs):
  
         get_data = request.query_params
@@ -357,7 +377,6 @@ class walletData(APIView):
 
 class walletData2(APIView):
     @method_decorator(cache_page(60*60*4))
-    @silk_profile(name='walletData2') 
     def get(self, request, format=None, *args, **kwargs):
         get_data = request.query_params
         wallet = get_data['wallet']
@@ -472,7 +491,6 @@ class walletData2(APIView):
 
 class donationData(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='walletData') 
     def get(self, request, format=None, *args, **kwargs):
 
         get_data = request.query_params
@@ -502,7 +520,6 @@ class donationData(APIView):
 
 class blockRewardDecay(APIView):
     @method_decorator(cache_page(60*60*12))
-    @silk_profile(name='blockRewardDecay')
     def get(self, request, format=None, *args, **kwargs):
 
         qs = QrlAggregatedBlockData.objects.values('date','block_reward_block_mean',)      
@@ -536,7 +553,6 @@ class blockRewardDecay(APIView):
 
 class blockRewardPos(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='blockRewardPos') 
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlWalletAddress.objects.values('address_balance').filter(address_balance__gte=40000000000000).order_by('-address_balance') # get al values more then 40k quanta
         df = read_frame(qs)
@@ -570,7 +586,6 @@ class blockRewardPos(APIView):
 
 class networkTransactionExchangVolume(APIView):
     @method_decorator(cache_page(60*60))
-    @silk_profile(name='blockRewardPos') 
     def get(self, request, format=None, *args, **kwargs):
         qs = QrlWalletAddress.objects.values('wallet_address').filter(wallet_type__exact='exchange')
         df = read_frame(qs)
