@@ -12,5 +12,11 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 
 
-CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
-CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+CORS_ALLOWED_ORIGINS = [
+    "https://www.quantascan.io",
+    "https://analytics.quantascan.io",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://www.quantascan.io",
+    "https://analytics.quantascan.io",
+]
