@@ -117,6 +117,12 @@ LOGGING = {
     },
 }
 
-CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
-CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+CORS_ALLOWED_ORIGINS = [
+    "https://www.quantascan.io",
+    "https://analytics.quantascan.io",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "https://www.quantascan.io",
+    "https://analytics.quantascan.io",
+]
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
