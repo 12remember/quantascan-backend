@@ -11,12 +11,3 @@ SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 
-
-CORS_ALLOWED_ORIGINS = [
-    "https://www.quantascan.io",
-    "https://analytics.quantascan.io",
-]
-CSRF_TRUSTED_ORIGINS = [
-    "https://www.quantascan.io",
-    "https://analytics.quantascan.io",
-]
