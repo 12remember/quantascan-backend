@@ -145,8 +145,8 @@ def recalculate_all_days():
 # Command-line execution
 if __name__ == "__main__":
     print("Usage:")
-    print("  python analyze_blocks.py             # Run daily analysis")
-    print("  python analyze_blocks.py recalculate_all  # Full reanalysis")
+    print("  python analyze-blocks-daily-v2.py             # Run daily analysis")
+    print("  python analyze-blocks-daily-v2.py recalculate_all  # Full reanalysis")
 
     try:
         if len(sys.argv) > 1 and sys.argv[1] == 'recalculate_all':

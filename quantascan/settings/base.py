@@ -8,7 +8,7 @@ environ.Env.read_env()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = env("SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'analytics.quantascan.io','quantascan.io','.quantascan.io', 'quantascan-live.herokuapp.com']
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -55,7 +55,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'quantascan.wsgi.application'
 
-CORS_ORIGIN_ALLOW_ALL = True
+
 
 # Database configuration
 DJANGO_ENV = env("DJANGO_ENV", default="development")
@@ -118,6 +118,3 @@ LOGGING = {
         'level': 'INFO',
     },
 }
-
-
-CSRF_TRUSTED_ORIGINS = ['*'] 

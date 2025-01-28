@@ -14,11 +14,12 @@ def fetch_latest_transaction_analytics_date():
         raise
 
 def fetch_transaction_data(start_date=None):
-    """Fetch transaction data from the blockchain."""
+    """Fetch transaction data from the blockchain, counting only unique transaction_hash."""
     try:
         if start_date:
             cur.execute('''
-                SELECT "transaction_block_number", 
+                SELECT DISTINCT "transaction_hash",
+                       "transaction_block_number",
                        public.qrl_blockchain_transactions.block_found_datetime,
                        "transaction_type", 
                        "transaction_amount_send", 
@@ -32,7 +33,8 @@ def fetch_transaction_data(start_date=None):
             ''', (start_date,))
         else:
             cur.execute('''
-                SELECT "transaction_block_number", 
+                SELECT DISTINCT "transaction_hash",
+                       "transaction_block_number",
                        public.qrl_blockchain_transactions.block_found_datetime,
                        "transaction_type", 
                        "transaction_amount_send", 
@@ -46,6 +48,7 @@ def fetch_transaction_data(start_date=None):
         return pd.DataFrame(
             cur.fetchall(),
             columns=[
+                "transaction_hash",  # Include this to identify unique hashes
                 "transaction_block_number", 
                 "block_found_datetime", 
                 "transaction_type", 
@@ -57,6 +60,7 @@ def fetch_transaction_data(start_date=None):
     except Exception as e:
         print(f"Error fetching transaction data: {e}")
         raise
+
 
 def analyze_transactions(df):
     """Analyze and aggregate transaction data."""
@@ -161,8 +165,8 @@ def recalculate_all_transactions():
 # Script entry point
 if __name__ == "__main__":
     print("Usage:")
-    print("  python analyze_transactions.py             # Run daily transaction analysis")
-    print("  python analyze_transactions.py recalculate_all  # Full transaction reanalysis")
+    print("  python analyze-transactions-daily-v2.py             # Run daily transaction analysis")
+    print("  python analyze-transactions-daily-v2.py recalculate_all  # Full transaction reanalysis")
 
     try:
         if len(sys.argv) > 1 and sys.argv[1] == 'recalculate_all':

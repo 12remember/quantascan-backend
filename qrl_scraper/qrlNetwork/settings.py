@@ -26,7 +26,7 @@ NEWSPIDER_MODULE = 'qrlNetwork.spiders'
 # Determine environment
 DJANGO_ENV = env("DJANGO_ENV", default="development")
 USE_PROD_DB = env.bool("USE_PROD_DB", default="False")
-
+LOG_LEVEL = 'INFO'
 
 # Database configuration
 if DJANGO_ENV == "production" or USE_PROD_DB:
@@ -73,11 +73,11 @@ USER_AGENT = 'QuantaScan.io (https://quantascan.io)'
 ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 64
+CONCURRENT_REQUESTS = 16
 
 # Configure a delay for requests for the same website (default: 0)
-DOWNLOAD_DELAY = 0  # 0.07
-CONCURRENT_REQUESTS_PER_DOMAIN = 64
+DOWNLOAD_DELAY = 0.05  # 0.07
+CONCURRENT_REQUESTS_PER_DOMAIN = 16
 
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False

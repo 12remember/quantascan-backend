@@ -28,30 +28,55 @@ from django.db.models import Max
 class BlockStatisticsView(APIView):
     @method_decorator(cache_page(5 * 60))
     def get(self, request, format=None):
-        # Get the highest block number
+        # Existing logic for blocks
         highest_block_number = QrlBlockchainBlocks.objects.aggregate(
             max_block_number=Max('block_number')
         )['max_block_number']
 
-        # Get total rows in the database
         total_rows = QrlBlockchainBlocks.objects.count()
-
-        # Calculate compliance percentage based on total possible blocks
+        adjusted_rows = total_rows - 1 if total_rows > 0 else 0  # block 0 vs row 1
         compliance_percentage = (
-            round((total_rows / highest_block_number * 100), 2)
+            round((adjusted_rows / highest_block_number * 100), 2)
             if highest_block_number > 0 else 0
         )
+        missing_blocks = highest_block_number - adjusted_rows if highest_block_number and adjusted_rows >= 0 else 0
 
-        # Calculate missing blocks
-        missing_blocks = (highest_block_number - total_rows) if highest_block_number and total_rows else 0
+        # 1. Sum of all transactions recorded in blocks
+        total_transactions_in_blocks = QrlBlockchainBlocks.objects.aggregate(
+            total_tx_in_blocks=Sum('block_number_of_transactions')
+        )['total_tx_in_blocks'] or 0
 
-        # Return the results
+        # 2. Actual transactions in the transactions table (counting only unique transaction_hash)
+        total_transactions_in_database = QrlBlockchainTransactions.objects.values(
+            'transaction_hash'
+        ).distinct().count()
+
+
+        # 3. Missing transactions (if any)
+        missing_transactions = total_transactions_in_blocks - total_transactions_in_database
+
+        # 4. Compliance for transactions
+        if total_transactions_in_blocks > 0:
+            compliance_percentage_transactions = round(
+                (total_transactions_in_database / total_transactions_in_blocks) * 100, 2
+            )
+        else:
+            compliance_percentage_transactions = 0
+
         return Response({
+            # Existing fields
             'highest_block_number': highest_block_number,
-            'total_rows': total_rows,
+            'total_rows': adjusted_rows,
             'compliance_percentage': compliance_percentage,
             'missing_blocks': missing_blocks,
+            # New transaction stats
+            'total_transactions_in_blocks': total_transactions_in_blocks,
+            'total_transactions_in_database': total_transactions_in_database,
+            'missing_transactions': missing_transactions,
+            'compliance_percentage_transactions': compliance_percentage_transactions,
         })
+
+
 
 
 
@@ -519,37 +544,73 @@ class donationData(APIView):
 
 
 class blockRewardDecay(APIView):
-    @method_decorator(cache_page(60*60*12))
+    @method_decorator(cache_page(60 * 60 * 12))
     def get(self, request, format=None, *args, **kwargs):
+        import datetime as dt
+        import pandas as pd
+        from django_pandas.io import read_frame
 
-        qs = QrlAggregatedBlockData.objects.values('date','block_reward_block_mean',)      
+        # 1. Fetch DB rows for your data
+        qs = QrlAggregatedBlockData.objects.values('date', 'block_reward_block_mean')
         df_total = read_frame(qs)
 
-        df_total = df_total[1:] # remove first day because mainnet tokentransfers
-        df_total["block_reward_block_mean"] = df_total['block_reward_block_mean'] / 1000000000  # total daily mining rewards convert from shor to quanta
-        #df_total.index = df_total["date"] # set index to date
-        
-        df_total = df_total.iloc[:-1] # removes last row of df_total because last daily average will change during the day otherwhise will cause a wrongly made startpoint for prediction 
-        
+        # 2. Adjust your existing DataFrame
+        # Remove first day
+        df_total = df_total[1:]
+        # Convert from 'shor' to 'quanta'
+        df_total["block_reward_block_mean"] = df_total['block_reward_block_mean'] / 1_000_000_000
+        # Remove last row (so partial day doesn't skew averages)
+        df_total = df_total.iloc[:-1]
 
-        df_prediction = pd.DataFrame({'date': pd.date_range(start= '26/06/2018', end='31/12/2020', freq='M', closed='right' )},)
-        df_prediction = df_prediction.append(pd.DataFrame({'date': pd.date_range(start= '01/01/2021', end='30/12/2219', freq='Y', closed='right' )},)) # create daily rows between startdate and end (31/12/2219)
-        df_prediction = df_prediction.reset_index(drop=True)
-    
-        list_with_estimates = [6.65409074166821, 6.60484405827424, 6.55596184779167, 6.50900096869821, 6.46082808943325, 6.41454866106017, 6.36707481988630, 6.31995233088309, 6.27768991409571, 6.23122895952696, 6.18659416808585, 6.14080740981777, 6.09682031516958, 6.05169796991948, 6.00690957350429, 5.96388159976742, 5.91974312911151, 5.87733953558782, 5.83384155959909, 5.79066551054748, 5.75056434492522, 5.70800462750842, 5.66711773380759, 5.62517560172251, 5.58354388183045, 5.54354851040589, 5.50252090964573, 5.46310591225154, 5.42267366423249, 5.38383061904377, 5.34398508458442, 4.89643410235329, 4.48636486427483, 4.11063832876382, 3.76547592056039, 3.45012278612224, 3.16118001826137, 2.89643578716996, 2.65322763516335, 2.43102367774111, 2.22742897873293, 2.04088503979910, 1.86951584142566, 1.71294660743953, 1.56948981919352, 1.43804732841860, 1.31729725524523, 1.20697552508621, 1.10589307945224, 1.01327614169558, 0.92819328952749, 0.85045845085312, 0.77923379191385, 0.71397409462077, 0.65402306069746, 0.59924958012370, 0.54906329892325, 0.50308004581706, 0.46083738026358, 0.42224291959026, 0.38688068889319, 0.35447999361059, 0.32471498913466, 0.29752058083596, 0.27260366469949, 0.24977350406749, 0.22880050248619, 0.20963879301247, 0.19208184885162, 0.17599527324154, 0.16121728805140, 0.14771557454023, 0.13534460990805, 0.12400969558002, 0.11359683953587, 0.10408326936156, 0.09536644685939, 0.08737964557004, 0.08004254449699, 0.07333909775398, 0.06719705493084, 0.06156939926540, 0.05639953501989, 0.05167615595052, 0.04734835301179, 0.04338299727782, 0.03974021029004, 0.03641202544897, 0.03336257125014, 0.03056850440743, 0.02800172578266, 0.02565662195474, 0.02350791716331, 0.02153916327457, 0.01973056108874, 0.01807815528007, 0.01656413605575, 0.01517691374053, 0.01390253743281, 0.01273822013306, 0.01167141271459, 0.01069394886659, 0.00979599851222, 0.00897559787736, 0.00822390460305, 0.00753516454771, 0.00690245124786, 0.00632438099001, 0.00579472327591, 0.00530942362540, 0.00486476711513, 0.00445734994120, 0.00408405336332, 0.00374201983117, 0.00342780961047, 0.00314073553864, 0.00287770350299, 0.00263670001796, 0.00241530137981, 0.00221302340040, 0.00202768590771, 0.00185787016061, 0.00170186837026, 0.00155933936827, 0.00142874696301, 0.00130909148184, 0.00119916958351, 0.00109874087414, 0.00100672292318, 0.00092241134184, 0.00084495823246, 0.00077419420882, 0.00070935656928, 0.00064994898780, 0.00059537401917, 0.00054551231057, 0.00049982644758, 0.00045796670919, 0.00041951212390, 0.00038437859337, 0.00035218744495, 0.00032269225842, 0.00029559640903, 0.00027084063949, 0.00024815812965, 0.00022737524705, 0.00020828298410, 0.00019083958697, 0.00017485704898, 0.00016021302532, 0.00014676024519, 0.00013446928800, 0.00012320768061, 0.00011288921647, 0.00010341012570, 0.00009474967800, 0.00008681453021, 0.00007954393951, 0.00007286478763, 0.00006676246759, 0.00006117120798, 0.00005604820824, 0.00005134194780, 0.00004704213431, 0.00004310242395, 0.00003949265860, 0.00003617653588, 0.00003314680359, 0.00003037080698, 0.00002782729604, 0.00002549069142, 0.00002335588307, 0.00002139986182, 0.00001960765450, 0.00001796123740, 0.00001645700987, 0.00001507875922, 0.00001381593506, 0.00001265583752, 0.00001159592952, 0.00001062478728, 0.00000973497679, 0.00000891754948, 0.00000817071768, 0.00000748643195, 0.00000685945416, 0.00000628347896, 0.00000575724673, 0.00000527508569, 0.00000483330493, 0.00000442746159, 0.00000405666812, 0.00000371692806, 0.00000340564074, 0.00000311967563, 0.00000285840733, 0.00000261901987, 0.00000239968076, 0.00000219818418, 0.00000201408945, 0.00000184541238, 0.00000169086178, 0.00000154888336, 0.00000141916663, 0.00000130031349, 0.00000119141413, 0.00000109137337, 0.00000099997244, 0.00000091622620, 0.00000083949359, 0.00000076918722, 0.00000070476891, 0.00000064574554, 0.00000059166529, 0.00000054198429, 0.00000049659389, 0.00000045500488, 0.00000041689888, 0.00000038189268, 0.00000034990972, 0.00000032060529, 0.00000029375507, 0.00000026908902, 0.00000024655320, 0.00000022590473, 0.00000020698554, 0.00000018960536, 0.00000017372619, 0.00000015917687, 0.00000014584604,]
-        #number_of_dates = df_prediction['date'].count() # count the number of dates
-        df_prediction["block_reward_block_mean"] = pd.Series(list_with_estimates) #addes predicted calculations list tot df based on number of dates
+        # ----------------------------------------------------------------------
+        # 3. Dynamically compute monthly decay predictions
+        # ----------------------------------------------------------------------
+        # For example: 120 months from 2018-06-26, 1% monthly decay
+        months_count = 2400  # 10 years
+        initial_reward = 6.654  # start value
+        decay_rate = 0.982      # 1% monthly decay
 
-        df_total["date"] = (df_total["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000 # creat datetime      
-        df_prediction["date"] = (df_prediction["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000 # creat datetime  
-
-        chart_data_point_list = df_total.to_dict('records')
-        chart_data_point_list_prediction = df_prediction.to_dict('records') # error -  dub here
-        
-        return Response({
-        'chart_data_point_list': chart_data_point_list,
-        'chart_data_point_list_prediction': chart_data_point_list_prediction, 
+        # Generate a monthly date range
+        df_prediction = pd.DataFrame({
+            'date': pd.date_range(
+                start='2018-06-26',
+                periods=months_count,
+                freq='M'  # monthly intervals
+            )
         })
+
+        # Compute the decayed reward for each month: reward_i = initial_reward * decay_rate^i
+        list_with_estimates = [
+            initial_reward * (decay_rate ** i) 
+            for i in range(months_count)
+        ]
+        df_prediction["block_reward_block_mean"] = list_with_estimates
+
+        # ----------------------------------------------------------------------
+        # 4. Convert `date` columns to milliseconds since epoch
+        # ----------------------------------------------------------------------
+        df_total["date"] = (
+            df_total["date"] - dt.datetime(1970, 1, 1)
+        ).dt.total_seconds() * 1000
+
+        df_prediction["date"] = (
+            df_prediction["date"] - dt.datetime(1970, 1, 1)
+        ).dt.total_seconds() * 1000
+
+        # ----------------------------------------------------------------------
+        # 5. Convert to dictionaries for serialization
+        # ----------------------------------------------------------------------
+        chart_data_point_list = df_total.to_dict('records')
+        chart_data_point_list_prediction = df_prediction.to_dict('records')
+
+        # ----------------------------------------------------------------------
+        # 6. Return both in the response
+        # ----------------------------------------------------------------------
+        return Response({
+            'chart_data_point_list': chart_data_point_list,
+            'chart_data_point_list_prediction': chart_data_point_list_prediction,
+        })
+
 
 class blockRewardPos(APIView):
     @method_decorator(cache_page(60*60))
