@@ -58,7 +58,7 @@ WSGI_APPLICATION = 'quantascan.wsgi.application'
 
 
 # Database configuration
-DJANGO_ENV = env("DJANGO_ENV", default="development")
+DJANGO_ENV = env("DJANGO_ENV", default="production")
 
 
 if DJANGO_ENV == "production":
@@ -92,7 +92,7 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_L10N = False
-USE_TZ = True
+USE_TZ = False
 
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')

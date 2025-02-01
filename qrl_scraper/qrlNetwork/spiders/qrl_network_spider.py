@@ -11,7 +11,7 @@ import sys
 from scrapy.spidermiddlewares.httperror import HttpError
 from twisted.internet.error import DNSLookupError, TimeoutError, TCPTimedOutError
 
-from ..settings import connection, cur, scrap_url
+from ..utils import get_db_connection, scrap_url
 from ..items import (
     QRLNetworkBlockItem,
     QRLNetworkTransactionItem,
@@ -27,6 +27,9 @@ def list_integer_to_hex(list_of_ints):
     array = bytearray(list_of_ints)
     return bytearray.hex(array)
 
+def list_integer_to_string(data_list):
+    return bytearray(data_list).decode()
+
 
 class QRLNetworkSpider(scrapy.Spider):
     name = "qrl_network_spider"
@@ -36,6 +39,7 @@ class QRLNetworkSpider(scrapy.Spider):
     def __init__(self, retry="", *args, **kwargs):
         super(QRLNetworkSpider, self).__init__(*args, **kwargs)
         self.retry = retry  # Activate retry mode if specified
+        self.connection, self.cur = get_db_connection()
 
     def start_requests(self):
         """
@@ -101,12 +105,15 @@ class QRLNetworkSpider(scrapy.Spider):
     def get_failed_urls(self):
         """Fetch failed transactions from the database (for retry=transactions mode)."""
         try:
-            cur.execute(
+            self.cur.execute(
                 'SELECT item_url FROM public."qrl_blockchain_missed_items" WHERE item_url LIKE %s',
                 ["%/tx/%"],
             )
-            failed_urls = [row[0] for row in cur.fetchall()]
+            failed_urls = [row[0] for row in self.cur.fetchall()]
             self.logger.info(f"Found {len(failed_urls)} failed transactions.")
+            # ✅ Log every failed transaction URL to verify structure
+            for url in failed_urls:
+                self.logger.info(f"Retrying failed transaction URL: {url} | Type: {type(url)}")
             return failed_urls
         except psycopg2.Error as e:
             self.logger.error(f"Database error in get_failed_urls: {e}")
@@ -126,8 +133,8 @@ class QRLNetworkSpider(scrapy.Spider):
                 AND EXTRACT(EPOCH FROM "block_found_datetime") < (EXTRACT(EPOCH FROM NOW()) - 2*24*3600)
             ORDER BY "block_number" ASC
             """
-            cur.execute(query)
-            return cur.fetchall()  # list of tuples
+            self.cur.execute(query)
+            return self.cur.fetchall()  # list of tuples
         except psycopg2.Error as e:
             self.logger.error(f"Database error in get_blocks_older_than_two_days_not_completed: {e}")
             return []
@@ -139,15 +146,18 @@ class QRLNetworkSpider(scrapy.Spider):
         """
         try:
             query = """
-            SELECT COUNT(DISTINCT "transaction_hash") 
+            SELECT COUNT(DISTINCT ("transaction_hash", "transaction_receiving_wallet_address"))
             FROM public."qrl_blockchain_transactions"
-            WHERE "transaction_block_number" = %s
+            WHERE "transaction_block_number" = %s;
             """
-            cur.execute(query, (block_number,))
-            return cur.fetchone()[0] or 0
+            self.cur.execute(query, (block_number,))
+            result = self.cur.fetchone()  # Use fetchone() instead of fetchall()
+            
+            return result[0] if result else 0  # Extract integer safely
         except psycopg2.Error as e:
             self.logger.error(f"Database error in get_transaction_count_for_block: {e}")
             return 0
+
 
     def mark_block_as_completed(self, block_number):
         """
@@ -159,25 +169,25 @@ class QRLNetworkSpider(scrapy.Spider):
             SET got_all_transactions = true
             WHERE "block_number" = %s
             """
-            cur.execute(query, (block_number,))
-            connection.commit()
+            self.cur.execute(query, (block_number,))
+            self.connection.commit()
             self.logger.info(f"Block {block_number} marked got_all_transactions = true.")
         except psycopg2.Error as e:
-            connection.rollback()
+            self.connection.rollback()
             self.logger.error(f"Database error while marking block {block_number} as complete: {e}")
 
     def remove_error(self, url):
         """Remove a processed error from the database (applicable for retry=transactions)."""
         try:
-            cur.execute(
+            self.cur.execute(
                 'DELETE FROM public."qrl_blockchain_missed_items" WHERE item_url = %s',
                 [url],
             )
-            connection.commit()
+            self.connection.commit()
             self.logger.info(f"Removed error for URL: {url}")
         except psycopg2.Error as e:
             self.logger.error(f"Database error in remove_error: {e}")
-            connection.rollback()
+            self.connection.rollback()
 
     # -------------------------------------------------------------------------
     #                           SPIDER PARSE METHODS
@@ -193,12 +203,12 @@ class QRLNetworkSpider(scrapy.Spider):
             current_block_height = int(json_response["info"]["block_height"])
 
             # Fetch the highest block number from the DB
-            cur.execute('SELECT MAX("block_number") FROM public."qrl_blockchain_blocks"')
-            highest_block_in_db = cur.fetchone()[0] or 0
+            self.cur.execute('SELECT MAX("block_number") FROM public."qrl_blockchain_blocks"')
+            highest_block_in_db = self.cur.fetchall()[0][0] or 0
 
             # Count how many rows are in the DB
-            cur.execute('SELECT COUNT(*) FROM public."qrl_blockchain_blocks"')
-            total_rows_in_db = cur.fetchone()[0]
+            self.cur.execute('SELECT COUNT(*) FROM public."qrl_blockchain_blocks"')
+            total_rows_in_db = self.cur.fetchall()[0][0] or 0 
 
             self.logger.info(
                 f"Current block height: {current_block_height}, "
@@ -208,8 +218,8 @@ class QRLNetworkSpider(scrapy.Spider):
             # Check for large gap or any gap
             if highest_block_in_db - total_rows_in_db > 10:
                 self.logger.info("Significant discrepancy found, checking for gaps...")
-                cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks" ORDER BY "block_number" ASC')
-                existing_blocks = set(row[0] for row in cur.fetchall())
+                self.cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks" ORDER BY "block_number" ASC')
+                existing_blocks = set(row[0] for row in self.cur.fetchall())
 
                 # Generate the expected range and identify missing blocks
                 expected_blocks = set(range(0, highest_block_in_db + 1))
@@ -279,7 +289,17 @@ class QRLNetworkSpider(scrapy.Spider):
             item_block["block_found_timestamp_seconds"] = block_extended_header["timestamp_seconds"]
 
             item_block["block_reward_block"] = block_extended_header["reward_block"]
-            item_block["block_reward_fee"] = block_extended_header["reward_fee"]
+   
+            reward_fee = block_extended_header.get("reward_fee", 0)
+
+            # Ensure fee is always stored as an integer in Shor
+            if isinstance(reward_fee, float):
+                item_block["block_reward_fee"] = int(reward_fee * 1_000_000_000)  # Convert from Quanta to Shor
+            elif isinstance(reward_fee, int):
+                item_block["block_reward_fee"] = reward_fee  # Already in Shor, store as is
+            else:
+                item_block["block_reward_fee"] = 0
+
             item_block["block_mining_nonce"] = block_extended_header["mining_nonce"]
             item_block["block_extra_nonce"] = block_extended_header["extra_nonce"]
 
@@ -317,7 +337,7 @@ class QRLNetworkSpider(scrapy.Spider):
 
         try:
             transaction = json_response["transaction"]
-
+            
             item_transaction["spider_name"] = self.name
             item_transaction["spider_version"] = self.version
 
@@ -346,6 +366,50 @@ class QRLNetworkSpider(scrapy.Spider):
             master_addr = transaction_tx["master_addr"]
             item_transaction["master_addr_type"] = master_addr["type"]
             item_transaction["master_addr_data"] = list_integer_to_hex(master_addr["data"])
+  
+            
+
+            # Extract fee safely
+            fee_value = transaction_tx.get("fee", "0")  # Default to "0" if missing
+
+            # Ensure fee is a valid number
+            try:
+                if isinstance(fee_value, str):
+                    fee_value = fee_value.strip()
+                    
+                    # Handle scientific notation (e.g., "1e-9")
+                    if "e" in fee_value.lower():
+                        fee_value = float(fee_value)
+
+                    # Convert valid numeric strings
+                    elif fee_value.replace(".", "", 1).isdigit():
+                        fee_value = float(fee_value)
+
+                    else:
+                        logging.warning(f"Invalid fee format (string): {fee_value}. Defaulting to 0.")
+                        fee_value = 0
+
+                elif isinstance(fee_value, float) or isinstance(fee_value, int):
+                    pass  # Already valid
+
+                elif isinstance(fee_value, list) or isinstance(fee_value, dict):  # 🚨 Catch unexpected formats
+                    logging.error(f"Unexpected fee format: {type(fee_value)} - {fee_value}. Using default value 0.")
+                    fee_value = 0
+
+                else:
+                    logging.warning(f"Unknown fee format: {type(fee_value)}. Defaulting to 0.")
+                    fee_value = 0
+
+                # Convert Quanta to Shor (1 Quanta = 10^9 Shor)
+                fee_value = int(fee_value * 1_000_000_000)
+
+            except Exception as e:
+                logging.error(f"Error parsing fee: {e}, Fee Value: {fee_value}")
+                fee_value = 0  # Default to zero if parsing fails
+
+            # Store the cleaned fee value
+            item_transaction["master_addr_fee"] = fee_value
+
 
             # transaction > tx > public_key
             public_key = transaction_tx["public_key"]
@@ -446,6 +510,25 @@ class QRLNetworkSpider(scrapy.Spider):
 
                     yield QRLNetworkTransactionItem(item_transaction)
 
+
+            # Slave transaction
+            elif transaction_tx["transactionType"] == "token":
+                token_data = transaction_tx["token"]
+
+                # Token initial balance
+                initial_balance = token_data["initial_balances"][0]
+                item_transaction["initial_balance_address"] = "Q" + list_integer_to_hex(initial_balance["address"]["data"])
+                item_transaction["initial_balance"] = initial_balance["amount"]
+
+                # Token metadata
+                item_transaction["token_symbol"] = list_integer_to_string(token_data["symbol"]["data"])
+                item_transaction["token_name"] = list_integer_to_string(token_data["name"]["data"])
+                item_transaction["token_owner"] = "Q" + list_integer_to_hex(token_data["owner"]["data"])
+                item_transaction["token_decimals"] = token_data["decimals"]
+
+                yield QRLNetworkTransactionItem(item_transaction)
+
+
             # If we're in "retry=transactions" mode, remove the error if success
             if self.retry == "transactions":
                 self.remove_error(response.url)
@@ -512,37 +595,29 @@ class QRLNetworkSpider(scrapy.Spider):
         item_missed["error"] = str(error)
         item_missed["item_url"] = response.url
 
-        yield item_missed
+        return item_missed 
 
     def errback_conn(self, failure):
+        """Handles network-related errors and logs them into the missed items table."""
         item_missed = QRLNetworkMissedItem()
 
         item_missed["spider_name"] = self.name
         item_missed["spider_version"] = self.version
         item_missed["location_script_file"] = str(__name__)
-        item_missed["location_script_function"] = str(__class__.__name__) + (", ") + str(sys._getframe().f_code.co_name)
+        item_missed["location_script_function"] = str(__class__.__name__) + ", " + str(sys._getframe().f_code.co_name)
+        item_missed["trace_back"] = repr(failure.value)
+        item_missed["item_url"] = failure.request.url
 
         if failure.check(HttpError):
             item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.value.response).split(" ")
-            # The failing URL:
-            item_missed["item_url"] = failure.request.url
-            item_missed["trace_back"] = repr(failure.value)
-
-            yield QRLNetworkMissedItem(item_missed)
+            item_missed["error_type"] = str(failure.value.response)
 
         elif failure.check(DNSLookupError):
             item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.request).split(" ")
-            item_missed["item_url"] = failure.request.url
-            item_missed["trace_back"] = repr(failure.value)
-
-            yield QRLNetworkMissedItem(item_missed)
+            item_missed["error_type"] = "DNS Lookup Error"
 
         elif failure.check(TimeoutError, TCPTimedOutError):
             item_missed["error"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.request).split(" ")
-            item_missed["item_url"] = failure.request.url
-            item_missed["trace_back"] = repr(failure.value)
+            item_missed["error_type"] = "Timeout Error"
 
-            yield QRLNetworkMissedItem(item_missed)
+        return item_missed 

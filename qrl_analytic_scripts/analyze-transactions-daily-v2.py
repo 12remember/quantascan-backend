@@ -16,39 +16,30 @@ def fetch_latest_transaction_analytics_date():
 def fetch_transaction_data(start_date=None):
     """Fetch transaction data from the blockchain, counting only unique transaction_hash."""
     try:
+        query = '''
+            SELECT DISTINCT "transaction_hash",
+                   "transaction_block_number",
+                   public.qrl_blockchain_transactions.block_found_datetime,
+                   "transaction_type", 
+                   "transaction_amount_send", 
+                   "transaction_result",
+                   qrl_blockchain_transactions.master_addr_fee
+            FROM public."qrl_blockchain_transactions"
+            INNER JOIN public."qrl_blockchain_blocks" 
+            ON "transaction_block_number" = "block_number"
+        '''
         if start_date:
-            cur.execute('''
-                SELECT DISTINCT "transaction_hash",
-                       "transaction_block_number",
-                       public.qrl_blockchain_transactions.block_found_datetime,
-                       "transaction_type", 
-                       "transaction_amount_send", 
-                       "transaction_result",
-                       qrl_blockchain_transactions.master_addr_fee
-                FROM public."qrl_blockchain_transactions"
-                INNER JOIN public."qrl_blockchain_blocks" 
-                ON "transaction_block_number" = "block_number"
-                WHERE public.qrl_blockchain_transactions.block_found_datetime >= %s
-                ORDER BY "transaction_block_number" ASC
-            ''', (start_date,))
+            query += ' WHERE public.qrl_blockchain_transactions.block_found_datetime >= %s '
+            query += 'ORDER BY "transaction_block_number" ASC'
+            cur.execute(query, (start_date,))
         else:
-            cur.execute('''
-                SELECT DISTINCT "transaction_hash",
-                       "transaction_block_number",
-                       public.qrl_blockchain_transactions.block_found_datetime,
-                       "transaction_type", 
-                       "transaction_amount_send", 
-                       "transaction_result",
-                       qrl_blockchain_transactions.master_addr_fee
-                FROM public."qrl_blockchain_transactions"
-                INNER JOIN public."qrl_blockchain_blocks" 
-                ON "transaction_block_number" = "block_number"
-                ORDER BY "transaction_block_number" ASC
-            ''')
+            query += ' ORDER BY "transaction_block_number" ASC'
+            cur.execute(query)
+        
         return pd.DataFrame(
             cur.fetchall(),
             columns=[
-                "transaction_hash",  # Include this to identify unique hashes
+                "transaction_hash",  
                 "transaction_block_number", 
                 "block_found_datetime", 
                 "transaction_type", 
@@ -61,13 +52,11 @@ def fetch_transaction_data(start_date=None):
         print(f"Error fetching transaction data: {e}")
         raise
 
-
 def analyze_transactions(df):
     """Analyze and aggregate transaction data."""
     try:
-        # Convert timestamps and group by day and type
         df['date'] = pd.to_datetime(df['block_found_datetime']).dt.floor('d')  # Use 'date' to match the table
-        df['master_addr_fee_no_0'] = df['master_addr_fee'].replace(0, np.nan)
+        df['master_addr_fee_no_0'] = df.apply(lambda row: np.nan if row['transaction_type'] == 'coinbase' else row['master_addr_fee'], axis=1)
 
         df_grouped = df.groupby(['date', 'transaction_type']).agg({
             'transaction_block_number': 'count',
@@ -103,7 +92,6 @@ def analyze_transactions(df):
         print(f"Error during transaction analysis: {e}")
         raise
 
-
 def save_transaction_analysis_to_database_upsert(df_grouped):
     """Insert or update aggregated transaction data in the database."""
     tuples = [tuple(row) for row in df_grouped.to_numpy()]
@@ -130,14 +118,13 @@ def save_transaction_analysis_to_database_upsert(df_grouped):
         connection.rollback()
         raise
 
-
 def analyze_qrl_transactions():
     """Perform daily transaction analysis."""
     try:
         latest_date = fetch_latest_transaction_analytics_date()
         print(f"Latest transaction analytics date found: {latest_date}.")
 
-        start_date = latest_date or datetime(2000, 1, 1)  # Default to 2000 if no data exists
+        start_date = latest_date or datetime(2000, 1, 1)
         data = fetch_transaction_data(start_date=start_date)
 
         if not data.empty:

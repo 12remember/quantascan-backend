@@ -23,6 +23,7 @@ ALLOWED_HOSTS = [
 # django-cors-headers
 CORS_ALLOWED_ORIGINS = [
     "https://www.quantascan.io",
+    "https://quantascan.io",
     "https://analytics.quantascan.io",
 ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -31,6 +32,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CSRF_TRUSTED_ORIGINS = [
     'https://www.quantascan.io',
+    "https://quantascan.io",
     'https://analytics.quantascan.io',
     '.herokuapp.com',  # <--- allow all herokuapp subdomains
 ]
