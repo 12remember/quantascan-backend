@@ -32,10 +32,10 @@ class QrlAggregatedTransactionData(models.Model):
     transaction_fee_mean = models.BigIntegerField(blank=True, null=True)
     transaction_fee_min = models.BigIntegerField(blank=True, null=True)
     transaction_fee_max = models.BigIntegerField(blank=True, null=True)
-    transaction_fee_total = models.DecimalField(max_digits=30, decimal_places=8, blank=True, null=True)
+    transaction_fee_total = models.BigIntegerField(blank=True, null=True)
     total_blocks_found = models.IntegerField()
     total_number_of_transactions = models.IntegerField()
-    total_amount_transfered = models.DecimalField(max_digits=30, decimal_places=8, blank=True, null=True)
+    total_amount_transfered = models.BigIntegerField()
     transaction_type = models.CharField(max_length=50)
 
     class Meta:
@@ -93,13 +93,12 @@ class QrlBlockchainMissedItems(models.Model):
 
 ### Blockchain Transactions ###
 class QrlBlockchainTransactions(models.Model):
-    id = models.BigAutoField(primary_key=True)
     transaction_result = models.TextField(blank=True, null=True)
     spider_name = models.CharField(max_length=255)
     spider_version = models.CharField(max_length=50)
-    transaction_hash = models.CharField(max_length=255)
-    transaction_sending_wallet_address = models.CharField(max_length=255)
-    transaction_receiving_wallet_address = models.CharField(max_length=255)
+    transaction_hash = models.CharField(primary_key=True, max_length=128)
+    transaction_sending_wallet_address = models.CharField(max_length=128)
+    transaction_receiving_wallet_address = models.CharField(max_length=128)
     transaction_amount_send = models.BigIntegerField()
     transaction_type = models.CharField(max_length=50)
     transaction_found = models.BooleanField()
@@ -120,7 +119,7 @@ class QrlBlockchainTransactions(models.Model):
     initial_balance = models.BigIntegerField(blank=True, null=True)
     token_symbol = models.CharField(max_length=10, blank=True, null=True)
     token_name = models.CharField(max_length=255, blank=True, null=True)
-    token_owner = models.CharField(max_length=255, blank=True, null=True)
+    token_owner = models.CharField(max_length=128, blank=True, null=True)
     token_decimals = models.IntegerField(blank=True, null=True)
 
     class Meta:
@@ -133,7 +132,7 @@ class QrlBlockchainTransactions(models.Model):
 class QrlWalletAddress(models.Model):
     spider_name = models.CharField(max_length=255, blank=True, null=True)
     spider_version = models.CharField(max_length=50, blank=True, null=True)
-    wallet_address = models.CharField(primary_key=True, max_length=255)
+    wallet_address = models.CharField(primary_key=True, max_length=128)
     address_nonce = models.IntegerField(blank=True, null=True)
     address_ots_bitfield_used_page = models.IntegerField(blank=True, null=True)
     address_used_ots_key_count = models.BigIntegerField(blank=True, null=True)

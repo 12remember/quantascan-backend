@@ -12,8 +12,9 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 
 ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
     'www.quantascan.io',
-    'quantascan.io',
     'analytics.quantascan.io',
     '.quantascan.io',
     '.herokuapp.com',        # <--- allow all subdomains of herokuapp.com
