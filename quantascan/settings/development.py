@@ -19,7 +19,9 @@ ALLOWED_HOSTS = [
     'www.quantascan.io',
     'analytics.quantascan.io',
     '.quantascan.io',
+    
     '.herokuapp.com',        # <--- allow all subdomains of herokuapp.com
 ]
 
+CORS_ALLOW_ALL_ORIGINS = True
 

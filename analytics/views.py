@@ -5,6 +5,7 @@ from django.db.models.functions import Rank
 
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
+
 from django.views.decorators.vary import vary_on_cookie
 from django.views.decorators.csrf import csrf_exempt
 from django.db import connection
@@ -193,117 +194,97 @@ class walletNumberOfWallets(APIView):
 
 
 class blockBlockSize(APIView):
-    @method_decorator(cache_page(60*60))
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
     def get(self, request, format=None, *args, **kwargs):
-        qs = QrlAggregatedBlockData.objects.values('date','block_size_mean', 'block_size_min', 'block_size_max', 'block_timestamp_seconds_max').order_by('date')
-        df_total = read_frame(qs)
-    
-        df_total["block_size_mean"] = df_total['block_size_mean']
-        df_total["block_size_min"] = df_total['block_size_min']
-        df_total["block_size_max"] = df_total['block_size_max']
-        
-        #df_total["dateReadable"] = df_total["date"].dt.strftime("%d %B %Y")
-                
-        df_total["date"] = (df_total["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        chart_data_point_list = []
-        for index, rows in df_total.iterrows(): 
-            data_point_row = {
-            "date":rows.date , 
-            "block_size_mean":rows.block_size_mean,
-            "block_size_min":rows.block_size_min,
-            "block_size_max":rows.block_size_max
-            } 
-            chart_data_point_list.append(data_point_row) 
-            
-        return Response({
-        'chart_data_point_list': chart_data_point_list, 
-        })
+        # Fetch only required fields directly from the database
+        qs = QrlAggregatedBlockData.objects.values(
+            'date', 'block_size_mean', 'block_size_min', 'block_size_max'
+        ).order_by('date')
+
+        # Convert QuerySet to list with epoch time conversion
+        chart_data_point_list = [
+            {
+                "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),
+                "block_size_mean": row["block_size_mean"],
+                "block_size_min": row["block_size_min"],
+                "block_size_max": row["block_size_max"],
+            }
+            for row in qs
+        ]
+
+        return Response({"chart_data_point_list": chart_data_point_list})
 
 
 
 class blockBlockTime(APIView):
-    @method_decorator(cache_page(60*60))
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
     def get(self, request, format=None, *args, **kwargs):
-        qs = QrlAggregatedBlockData.objects.values('date','block_number_count', 'block_timestamp_seconds_mean', 'block_timestamp_seconds_min', 'block_timestamp_seconds_max').order_by('date')      
-        df_total = read_frame(qs)
-           
-        df_total["date"] = (df_total["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        chart_data_point_list = []
-        for index, rows in df_total.iterrows(): 
-            data_point_row = {
-            "date":rows.date , 
-            "block_timestamp_seconds_mean":rows.block_timestamp_seconds_mean,
-            "block_timestamp_seconds_min":rows.block_timestamp_seconds_min,
-            "block_timestamp_seconds_max":rows.block_timestamp_seconds_max,
-            "block_number_count":rows.block_number_count
-            } 
-            chart_data_point_list.append(data_point_row) 
-            
-        return Response({
-        'chart_data_point_list': chart_data_point_list, 
-        })
+        # Fetch only required fields directly from the database
+        qs = QrlAggregatedBlockData.objects.values(
+            'date', 'block_number_count', 'block_timestamp_seconds_mean', 
+            'block_timestamp_seconds_min', 'block_timestamp_seconds_max'
+        ).order_by('date')
+
+        # Convert QuerySet to list with epoch time conversion
+        chart_data_point_list = [
+            {
+                "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),
+                "block_timestamp_seconds_mean": row["block_timestamp_seconds_mean"],
+                "block_timestamp_seconds_min": row["block_timestamp_seconds_min"],
+                "block_timestamp_seconds_max": row["block_timestamp_seconds_max"],
+                "block_number_count": row["block_number_count"],
+            }
+            for row in qs
+        ]
+
+        return Response({"chart_data_point_list": chart_data_point_list})
 
 
 
 class networkTransactions(APIView):
-    @method_decorator(cache_page(60*60))
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
     def get(self, request, format=None, *args, **kwargs):
 
-        qs = QrlAggregatedTransactionData.objects.values('date','total_number_of_transactions', 'total_amount_transfered', 'transaction_type', 'total_blocks_found').order_by('date')      
-        df_total = read_frame(qs)
+        # Fetch data directly from the database with required fields
+        qs = QrlAggregatedTransactionData.objects.values(
+            'date', 'total_number_of_transactions', 'total_amount_transfered', 'transaction_type'
+        ).order_by('date')
 
-        df_total = df_total[1:] # remove first day because mainnet tokentransfers
-        
-        df_coinbase = df_total[df_total['transaction_type']=='coinbase']
-        df_coinbase["epoch"] = (df_coinbase["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        df_coinbase["total_number_of_transactions"] = df_coinbase['total_number_of_transactions']
-        df_coinbase["total_amount_transfered"] = df_coinbase['total_amount_transfered']
-        
-        df_transfer = df_total[df_total['transaction_type']=='transfer']
-        df_transfer["epoch"] = (df_transfer["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        df_transfer["total_number_of_transactions"] = df_transfer['total_number_of_transactions']
-        df_transfer["total_amount_transfered"] = df_transfer['total_amount_transfered']
-        
-        df_slave = df_total[df_total['transaction_type']=='slave']
-        df_slave["epoch"] = (df_slave["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        df_slave["total_number_of_transactions"] = df_slave['total_number_of_transactions']
-        df_slave["total_amount_transfered"] = df_slave['total_amount_transfered']    
-        
-        
-        chart_data_point_list_coinbase = []
-        for index, rows in df_coinbase.iterrows(): 
-            data_point_row = {
-            "date": rows.epoch ,
-            "total_number_of_transactions":rows.total_number_of_transactions,
-            "total_amount_transfered":rows.total_amount_transfered,  
-            } 
-            chart_data_point_list_coinbase.append(data_point_row) 
-    
+        # Convert QuerySet to list for easier processing
+        data_list = list(qs)
 
-        chart_data_point_list_transfer = []
-        for index, rows in df_transfer.iterrows(): 
-            data_point_row = {
-            "date": rows.epoch ,
-            "total_number_of_transactions":rows.total_number_of_transactions,
-            "total_amount_transfered":rows.total_amount_transfered,  
-            } 
-            chart_data_point_list_transfer.append(data_point_row) 
+        # Remove first day's data (mainnet token transfers)
+        if data_list:
+            data_list = data_list[1:]
 
-        chart_data_point_list_slave = []
-        for index, rows in df_slave.iterrows(): 
-            data_point_row = {
-            "date": rows.epoch ,
-            "total_number_of_transactions":rows.total_number_of_transactions,
-            "total_amount_transfered":rows.total_amount_transfered,  
-            } 
-            chart_data_point_list_slave.append(data_point_row) 
-        
-        
+        # Convert datetime to epoch (milliseconds) and structure data per transaction type
+        transactions = {
+            "coinbase": [],
+            "transfer": [],
+            "slave": []
+        }
+
+        for row in data_list:
+            epoch_time = int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000)
+
+            # Create data point
+            data_point = {
+                "date": epoch_time,
+                "total_number_of_transactions": row["total_number_of_transactions"],
+                "total_amount_transfered": row["total_amount_transfered"],
+            }
+
+            # Categorize based on transaction type
+            tx_type = row["transaction_type"]
+            if tx_type in transactions:
+                transactions[tx_type].append(data_point)
+
+        # Return structured response
         return Response({
-        'chart_data_point_list_coinbase': chart_data_point_list_coinbase, 
-        'chart_data_point_list_transfer': chart_data_point_list_transfer,
-        'chart_data_point_list_slave': chart_data_point_list_slave
-        })        
+            'chart_data_point_list_coinbase': transactions["coinbase"],
+            'chart_data_point_list_transfer': transactions["transfer"],
+            'chart_data_point_list_slave': transactions["slave"],
+        })
         
    
 class networkTotalCirculatingQuanta(APIView):
@@ -331,31 +312,29 @@ class networkTotalCirculatingQuanta(APIView):
         'chart_data_point_list': chart_data_point_list, 
         })
 
-class networkTransactionFee(APIView):
-    @method_decorator(cache_page(60*60))      
-    def get(self, request, format=None, *args, **kwargs):
-        qs = QrlAggregatedTransactionData.objects.filter(transaction_type__exact='transfer').order_by('date') # in db there is a daily row for each transaction type. to calculate average transaction fee only type 'transfer' is selected      
-        df_total = read_frame(qs)
-    
-        df_total["transaction_fee_mean"] = df_total["transaction_fee_mean"] / 1000000000  # average transaction fee from shor to quanta
-        df_total["transaction_fee_min"] = df_total["transaction_fee_min"] / 1000000000  # average transaction fee from shor to quanta
-        df_total["transaction_fee_max"] = df_total["transaction_fee_max"] / 1000000000  # average transaction fee from shor to quanta
-                
-        df_total["epoch"] = (df_total["date"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-        chart_data_point_list = []
-        for index, rows in df_total.iterrows(): 
-            data_point_row = {
-            "date": rows.epoch ,
-            "transaction_fee_mean":rows.transaction_fee_mean,
-            "transaction_fee_min":rows.transaction_fee_min,  
-            "transaction_fee_max":rows.transaction_fee_max, 
-            } 
-            chart_data_point_list.append(data_point_row) 
-            
-        return Response({
-        'chart_data_point_list': chart_data_point_list, 
-        })
 
+class networkTransactionFee(APIView):
+    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+    def get(self, request, format=None, *args, **kwargs):
+        # Fetch only required fields
+        qs = QrlAggregatedTransactionData.objects.filter(transaction_type='transfer').values(
+            'date', 'transaction_fee_mean', 'transaction_fee_min', 'transaction_fee_max'
+        ).order_by('date')
+
+        # Process data
+        chart_data_point_list = [
+            {
+                "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),  # Manual epoch conversion
+                "transaction_fee_mean": (row["transaction_fee_mean"] / 1e9) if row["transaction_fee_mean"] else 0,
+                "transaction_fee_min": (row["transaction_fee_min"] / 1e9) if row["transaction_fee_min"] else 0,
+                "transaction_fee_max": (row["transaction_fee_max"] / 1e9) if row["transaction_fee_max"] else 0,
+            }
+            for row in qs
+        ]
+
+        return Response({"chart_data_point_list": chart_data_point_list})
+    
+    
 class networkUniqueWalletsUsed(APIView):
     @method_decorator(cache_page(60*60))       
     def get(self, request, format=None, *args, **kwargs):
@@ -380,138 +359,145 @@ class networkUniqueWalletsUsed(APIView):
 
 
 class walletData(APIView):
-    @method_decorator(cache_page(5*60))
+    @method_decorator(cache_page(5 * 60))  # Cache for 5 minutes
     def get(self, request, format=None, *args, **kwargs):
- 
-        get_data = request.query_params
-        wallet = get_data['wallet']
-        
-        qs_wallet = QrlWalletAddress.objects.values('address_balance', 'wallet_custom_name', 'wallet_address', 'address_first_found', 'wallet_type').annotate(rank=Window(expression=Rank(),order_by=F('address_balance').desc()))    
-        df_wallet = read_frame(qs_wallet)
+        wallet = request.query_params.get('wallet')
+        if not wallet:
+            raise Http404("Wallet parameter is missing.")
 
-        df_wallet_filter = df_wallet[(df_wallet.wallet_address == wallet)]
-        if not df_wallet_filter.empty:
-            df_wallet_filter = df_wallet_filter[['wallet_address', 'address_balance', 'wallet_custom_name', 'rank', 'address_first_found', 'wallet_type']]
-            df_wallet_filter = df_wallet_filter.to_dict(orient='records')[0]
-                
-            return Response({
-            'general_wallet_data':df_wallet_filter,
-            })
-        else:
-            raise Http404
+        # Fetch wallet data and rank by balance
+        qs_wallet = QrlWalletAddress.objects.annotate(
+            rank=Window(expression=Rank(), order_by=F('address_balance').desc())
+        ).filter(wallet_address=wallet).values(
+            'wallet_address', 'address_balance', 'wallet_custom_name', 'rank', 'address_first_found', 'wallet_type'
+        )
+
+        wallet_data = list(qs_wallet)
+        if not wallet_data:
+            raise Http404("Wallet not found.")
+
+        return Response({"general_wallet_data": wallet_data[0]})
 
 class walletData2(APIView):
-    @method_decorator(cache_page(60*60*4))
+    @method_decorator(cache_page(60 * 60 * 4))  # Cache for 4 hours
     def get(self, request, format=None, *args, **kwargs):
-        get_data = request.query_params
-        wallet = get_data['wallet']
+        wallet = request.query_params.get('wallet')
+        if not wallet:
+            raise Http404("Wallet parameter is missing.")
 
-        qs_transaction = QrlBlockchainTransactions.objects.values('transaction_amount_send', 'transaction_sending_wallet_address', 'transaction_receiving_wallet_address', 'transaction_type', 'block_found_datetime', 'transaction_hash').filter(transaction_sending_wallet_address=wallet) | QrlBlockchainTransactions.objects.values('transaction_amount_send', 'transaction_sending_wallet_address', 'transaction_receiving_wallet_address', 'transaction_type', 'block_found_datetime', 'transaction_hash').filter(transaction_receiving_wallet_address=wallet)    
+        # Fetch transactions involving the given wallet
+        qs_transaction = QrlBlockchainTransactions.objects.filter(
+            transaction_sending_wallet_address=wallet
+        ).union(
+            QrlBlockchainTransactions.objects.filter(transaction_receiving_wallet_address=wallet)
+        ).values(
+            'transaction_amount_send', 'transaction_sending_wallet_address',
+            'transaction_receiving_wallet_address', 'transaction_type',
+            'block_found_datetime', 'transaction_hash'
+        )
 
-        if qs_transaction:
-            df_transaction = read_frame(qs_transaction)
-            # Creat Associated Addresses
-            top_transactions_sending = df_transaction[df_transaction["transaction_sending_wallet_address"]== wallet].sort_values(by=['transaction_amount_send'], ascending=False).head(100)
-            top_transactions_sending = top_transactions_sending[['transaction_amount_send', 'transaction_receiving_wallet_address','transaction_hash', 'transaction_type', 'block_found_datetime']]
-            top_transactions_receiving = df_transaction[df_transaction["transaction_receiving_wallet_address"]== wallet].sort_values(by=['transaction_amount_send'], ascending=False).head(100)    
-            top_transactions_receiving = top_transactions_receiving[['transaction_amount_send', 'transaction_sending_wallet_address','transaction_hash', 'transaction_type', 'block_found_datetime']]
+        transactions = list(qs_transaction)
+        if not transactions:
+            raise Http404("No transactions found.")
 
-            list_top_transactions_sending = []
-            for index, rows in top_transactions_sending.iterrows(): 
-                data_point_row = { 
-                    "transaction_amount_send":rows.transaction_amount_send, 
-                    "transaction_receiving_wallet_address":rows.transaction_receiving_wallet_address,
-                    "transaction_hash":rows.transaction_hash,
-                    "transaction_type":rows.transaction_type,
-                    "block_found_datetime":rows.block_found_datetime} 
-                list_top_transactions_sending.append(data_point_row) 
+        # Create associated addresses
+        top_transactions_sending = sorted(
+            (tx for tx in transactions if tx["transaction_sending_wallet_address"] == wallet),
+            key=lambda x: x["transaction_amount_send"],
+            reverse=True
+        )[:100]
 
-            list_top_transactions_receiving = []
-            for index, rows in top_transactions_receiving.iterrows(): 
-                data_point_row = { 
-                    "transaction_amount_send":rows.transaction_amount_send, 
-                    "transaction_sending_wallet_address":rows.transaction_sending_wallet_address,
-                    "transaction_hash":rows.transaction_hash,
-                    "transaction_type":rows.transaction_type,
-                    "block_found_datetime":rows.block_found_datetime} 
-                list_top_transactions_receiving.append(data_point_row) 
+        top_transactions_receiving = sorted(
+            (tx for tx in transactions if tx["transaction_receiving_wallet_address"] == wallet),
+            key=lambda x: x["transaction_amount_send"],
+            reverse=True
+        )[:100]
 
-            df_transaction["number_of_transactions"] = ''
-            most_sending_wallets = df_transaction.pivot_table(index=['transaction_sending_wallet_address'],aggfunc={'number_of_transactions':'size', 'transaction_amount_send':'sum'}).head(100).sort_values('number_of_transactions', ascending=False).reset_index('transaction_sending_wallet_address')
-            most_receiving_wallets = df_transaction.pivot_table(index=['transaction_receiving_wallet_address'], aggfunc={'number_of_transactions':'size', 'transaction_amount_send':'sum'}).head(100).sort_values('number_of_transactions', ascending=False).reset_index('transaction_receiving_wallet_address')
+        list_top_transactions_sending = [
+            {
+                "transaction_amount_send": tx["transaction_amount_send"],
+                "transaction_receiving_wallet_address": tx["transaction_receiving_wallet_address"],
+                "transaction_hash": tx["transaction_hash"],
+                "transaction_type": tx["transaction_type"],
+                "block_found_datetime": tx["block_found_datetime"],
+            }
+            for tx in top_transactions_sending
+        ]
 
-            list_most_sending_wallets = []
-            for index, rows in most_sending_wallets.iterrows(): 
-                data_point_row = { 
-                    "transaction_sending_wallet_address":rows.transaction_sending_wallet_address,  
-                    "number_of_transactions":rows.number_of_transactions,
-                    "transaction_amount_send":rows.transaction_amount_send} 
-                list_most_sending_wallets.append(data_point_row) 
+        list_top_transactions_receiving = [
+            {
+                "transaction_amount_send": tx["transaction_amount_send"],
+                "transaction_sending_wallet_address": tx["transaction_sending_wallet_address"],
+                "transaction_hash": tx["transaction_hash"],
+                "transaction_type": tx["transaction_type"],
+                "block_found_datetime": tx["block_found_datetime"],
+            }
+            for tx in top_transactions_receiving
+        ]
 
-            list_most_receiving_wallets = []
-            for index, rows in most_receiving_wallets.iterrows(): 
-                data_point_row = { 
-                    "transaction_receiving_wallet_address":rows.transaction_receiving_wallet_address, 
-                    "number_of_transactions":rows.number_of_transactions,
-                    "transaction_amount_send":rows.transaction_amount_send} 
-   
-                if (data_point_row["transaction_receiving_wallet_address"] != wallet):      
-                    list_most_receiving_wallets.append(data_point_row)
-                else:
-                    pass     
+        # Aggregate most sending/receiving wallets
+        df_transaction = pd.DataFrame(transactions)
+        df_transaction["number_of_transactions"] = ''
 
+        most_sending_wallets = df_transaction.groupby("transaction_sending_wallet_address").agg(
+            number_of_transactions=('transaction_amount_send', 'size'),
+            transaction_amount_send=('transaction_amount_send', 'sum')
+        ).reset_index().nlargest(100, 'number_of_transactions').to_dict(orient="records")
 
+        most_receiving_wallets = df_transaction.groupby("transaction_receiving_wallet_address").agg(
+            number_of_transactions=('transaction_amount_send', 'size'),
+            transaction_amount_send=('transaction_amount_send', 'sum')
+        ).reset_index().nlargest(100, 'number_of_transactions').to_dict(orient="records")
 
-            total_transaction_send_number =  df_transaction[df_transaction["transaction_sending_wallet_address"] == wallet].count()[0]
-            total_transaction_receive_number =  df_transaction[df_transaction["transaction_receiving_wallet_address"] == wallet].count()[0]
-            
-            # Create Chart
-            df_transaction.loc[df_transaction.transaction_sending_wallet_address == wallet, 'transaction_amount_send'] = df_transaction.transaction_amount_send* -1 # if wallet is sending then substract value of transaction amount
-            s = pd.to_datetime(df_transaction['block_found_datetime'], unit='s')          
-            df_transaction['date']=s.dt.floor('d')
- 
-            df_grouped = df_transaction.groupby(['date'],).agg({'transaction_amount_send': ['sum',]})
-            df_grouped.columns = ["_".join(x) for x in df_grouped.columns.ravel()]
-        
-            df_grouped["date"] = df_grouped.index
-            startDateRange = df_grouped.index[0] - timedelta(5)  
-            idx = pd.date_range(startDateRange, dt.datetime.now())
-        
-            s = pd.Series(df_grouped["date"])        
-            df_grouped.index = pd.DatetimeIndex(s.index)        
-            df_grouped = df_grouped.reindex(idx)
-            df_grouped.fillna(0, inplace=True)
-            
-            s_transactions = pd.Series(df_grouped['transaction_amount_send_sum'])
-            df_grouped["wallet_value_total_daily"] = s_transactions.cumsum()
+        # Remove the wallet itself from receiving list
+        list_most_receiving_wallets = [
+            wallet_data for wallet_data in most_receiving_wallets if wallet_data["transaction_receiving_wallet_address"] != wallet
+        ]
 
-            df_grouped["epoch"] = df_grouped.index 
-            df_grouped["epoch"] = (df_grouped["epoch"] - dt.datetime(1970,1,1)).dt.total_seconds() *1000
-                    
-            chart_data_point_list = []
-            for index, rows in df_grouped.iterrows(): 
-                data_point_row = {
-                    "date":rows.epoch, 
-                    "wallet_value_total_daily":rows.wallet_value_total_daily, 
-                    "transaction_amount_send_sum":rows.transaction_amount_send_sum} 
-                chart_data_point_list.append(data_point_row) 
-    
-            
-            return Response({
-            'general_wallet_transaction_data':{
-                'total_transaction_send_number':total_transaction_send_number,
-                'total_transaction_receive_number':total_transaction_receive_number,
-                'list_most_sending_wallets':list_most_sending_wallets,
-                'list_most_receiving_wallets':list_most_receiving_wallets,
-                'total_transaction_receive_number':total_transaction_receive_number,
-                'list_top_transactions_receiving':list_top_transactions_receiving,
-                'list_top_transactions_sending':list_top_transactions_sending,
+        # Total transaction counts
+        total_transaction_send_number = sum(
+            1 for tx in transactions if tx["transaction_sending_wallet_address"] == wallet
+        )
+        total_transaction_receive_number = sum(
+            1 for tx in transactions if tx["transaction_receiving_wallet_address"] == wallet
+        )
+
+        # Create Chart
+        df_transaction.loc[df_transaction.transaction_sending_wallet_address == wallet, 'transaction_amount_send'] *= -1
+        df_transaction['date'] = pd.to_datetime(df_transaction['block_found_datetime'], unit='s').dt.floor('d')
+
+        df_grouped = df_transaction.groupby(['date']).agg(transaction_amount_send_sum=('transaction_amount_send', 'sum'))
+        df_grouped["date"] = df_grouped.index
+
+        startDateRange = df_grouped.index.min() - timedelta(5)
+        idx = pd.date_range(startDateRange, dt.datetime.now())
+
+        df_grouped = df_grouped.reindex(idx, fill_value=0)
+        df_grouped["wallet_value_total_daily"] = df_grouped['transaction_amount_send_sum'].cumsum()
+        df_grouped["epoch"] = (df_grouped.index - dt.datetime(1970, 1, 1)).total_seconds() * 1000
+
+        chart_data_point_list = [
+            {
+                "date": epoch,
+                "wallet_value_total_daily": wallet_value_total_daily,
+                "transaction_amount_send_sum": transaction_amount_send_sum
+            }
+            for epoch, wallet_value_total_daily, transaction_amount_send_sum in zip(
+                df_grouped["epoch"], df_grouped["wallet_value_total_daily"], df_grouped["transaction_amount_send_sum"]
+            )
+        ]
+
+        return Response({
+            'general_wallet_transaction_data': {
+                'total_transaction_send_number': total_transaction_send_number,
+                'total_transaction_receive_number': total_transaction_receive_number,
+                'list_most_sending_wallets': most_sending_wallets,
+                'list_most_receiving_wallets': list_most_receiving_wallets,
+                'list_top_transactions_receiving': list_top_transactions_receiving,
+                'list_top_transactions_sending': list_top_transactions_sending,
             },
-            'chart_data_point_list': chart_data_point_list, 
-            })
-
-        else:
-            raise Http404
+            'chart_data_point_list': chart_data_point_list,
+        })
 
 
 class donationData(APIView):
@@ -575,7 +561,7 @@ class blockRewardDecay(APIView):
             'date': pd.date_range(
                 start='2018-06-26',
                 periods=months_count,
-                freq='M'  # monthly intervals
+                freq='ME'  # monthly intervals
             )
         })
 

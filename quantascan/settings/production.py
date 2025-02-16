@@ -16,7 +16,7 @@ ALLOWED_HOSTS = [
     'quantascan.io',
     'analytics.quantascan.io',
     '.quantascan.io',
-    '.herokuapp.com',        # <--- allow all subdomains of herokuapp.com
+    '.herokuapp.com',    # <--- allow all subdomains of herokuapp.com
 ]
 
 # django-cors-headers
