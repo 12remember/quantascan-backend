@@ -23,5 +23,6 @@ setuptools = "*"
 wheel = "*"
 dj-database-url = "*"
 django-debug-toolbar = "*"
+numpy = "*"
 
 [dev-packages]

@@ -44,11 +44,11 @@ USER_AGENT = 'QuantaScan.io (https://quantascan.io)'
 ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 16
+CONCURRENT_REQUESTS = 32
 
 # Configure a delay for requests for the same website (default: 0)
-DOWNLOAD_DELAY = 0.05  # 0.07
-CONCURRENT_REQUESTS_PER_DOMAIN = 16
+#DOWNLOAD_DELAY = 0.0  # 0.07
+CONCURRENT_REQUESTS_PER_DOMAIN = 32
 
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False
