@@ -1,8 +1,55 @@
 import sys
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from settings import connection, cur
+
+GENESIS_DATE = datetime(2018, 6, 26)  # QRL blockchain launch date
+
+def fetch_existing_transaction_dates():
+    """Fetch all available transaction dates from the aggregated data table."""
+    try:
+        cur.execute('SELECT DISTINCT "date" FROM public."qrl_aggregated_transaction_data" ORDER BY "date" ASC')
+        result = cur.fetchall()
+        return {row[0] for row in result}  # Convert to a set for quick lookup
+    except Exception as e:
+        print(f"Error fetching existing transaction dates: {e}")
+        raise
+
+def find_missing_transaction_days():
+    """Find missing days between genesis block date and today in the aggregated transaction table."""
+    try:
+        existing_dates = fetch_existing_transaction_dates()
+        all_dates = {GENESIS_DATE + timedelta(days=i) for i in range((datetime.utcnow() - GENESIS_DATE).days + 1)}
+
+        missing_dates = sorted(all_dates - existing_dates)  # Find missing dates
+        return missing_dates
+    except Exception as e:
+        print(f"Error finding missing transaction days: {e}")
+        raise
+
+def analyze_missing_transaction_days():
+    """Recalculate transaction analytics for missing days."""
+    try:
+        missing_dates = find_missing_transaction_days()
+        if not missing_dates:
+            print("✅ No missing transaction days detected.")
+            return
+
+        print(f"⚠️ Missing {len(missing_dates)} transaction days. Recalculating...")
+        for missing_date in missing_dates:
+            print(f"📅 Processing missing transactions for date: {missing_date}")
+            data = fetch_transaction_data(start_date=missing_date)
+
+            if not data.empty:
+                result = analyze_transactions(data)
+                save_transaction_analysis_to_database_upsert(result)
+            else:
+                print(f"⚠️ No transactions found for {missing_date}, skipping.")
+
+        print("✅ Recalculation of missing transaction days complete.")
+    except Exception as e:
+        print(f"Error in missing transaction days recalculation: {e}")
 
 def fetch_latest_transaction_analytics_date():
     """Fetch the latest date from the transaction analytics table."""
@@ -112,53 +159,28 @@ def save_transaction_analysis_to_database_upsert(df_grouped):
         with connection.cursor() as cursor:
             cursor.executemany(query, tuples)
             connection.commit()
-            print(f"Successfully upserted {len(tuples)} rows.")
+            print(f"✅ Successfully upserted {len(tuples)} rows.")
     except Exception as e:
-        print(f"Error saving transaction analysis to database: {e}")
+        print(f"❌ Error saving transaction analysis to database: {e}")
         connection.rollback()
         raise
-
-def analyze_qrl_transactions():
-    """Perform daily transaction analysis."""
-    try:
-        latest_date = fetch_latest_transaction_analytics_date()
-        print(f"Latest transaction analytics date found: {latest_date}.")
-
-        start_date = latest_date or datetime(2000, 1, 1)
-        data = fetch_transaction_data(start_date=start_date)
-
-        if not data.empty:
-            result = analyze_transactions(data)
-            save_transaction_analysis_to_database_upsert(result)
-
-        print("Daily transaction analysis complete.")
-    except Exception as e:
-        print(f"Error in daily transaction analysis: {e}")
-
-def recalculate_all_transactions():
-    """Recalculate transaction analytics for all data."""
-    try:
-        print("Starting full transaction reanalysis.")
-        data = fetch_transaction_data()
-
-        if not data.empty:
-            result = analyze_transactions(data)
-            save_transaction_analysis_to_database_upsert(result)
-
-        print("Full transaction reanalysis complete.")
-    except Exception as e:
-        print(f"Error in full transaction reanalysis: {e}")
 
 # Script entry point
 if __name__ == "__main__":
     print("Usage:")
     print("  python analyze-transactions-daily-v2.py             # Run daily transaction analysis")
     print("  python analyze-transactions-daily-v2.py recalculate_all  # Full transaction reanalysis")
+    print("  python analyze-transactions-daily-v2.py check_missing  # Check and fill missing transaction days")
 
     try:
-        if len(sys.argv) > 1 and sys.argv[1] == 'recalculate_all':
-            recalculate_all_transactions()
+        if len(sys.argv) > 1:
+            if sys.argv[1] == 'recalculate_all':
+                recalculate_all_transactions()
+            elif sys.argv[1] == 'check_missing':
+                analyze_missing_transaction_days()
+            else:
+                print("⚠️ Unknown command.")
         else:
             analyze_qrl_transactions()
     except Exception as e:
-        print(f"Critical error in main execution: {e}")
+        print(f"❌ Critical error in main execution: {e}")

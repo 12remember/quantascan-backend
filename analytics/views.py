@@ -325,9 +325,9 @@ class networkTransactionFee(APIView):
         chart_data_point_list = [
             {
                 "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),  # Manual epoch conversion
-                "transaction_fee_mean": (row["transaction_fee_mean"] / 1e9) if row["transaction_fee_mean"] else 0,
-                "transaction_fee_min": (row["transaction_fee_min"] / 1e9) if row["transaction_fee_min"] else 0,
-                "transaction_fee_max": (row["transaction_fee_max"] / 1e9) if row["transaction_fee_max"] else 0,
+                "transaction_fee_mean": (row["transaction_fee_mean"] ) if row["transaction_fee_mean"] else 0,
+                "transaction_fee_min": (row["transaction_fee_min"] ) if row["transaction_fee_min"] else 0,
+                "transaction_fee_max": (row["transaction_fee_max"]) if row["transaction_fee_max"] else 0,
             }
             for row in qs
         ]
@@ -365,14 +365,16 @@ class walletData(APIView):
         if not wallet:
             raise Http404("Wallet parameter is missing.")
 
-        # Fetch wallet data and rank by balance
-        qs_wallet = QrlWalletAddress.objects.annotate(
+        # Fetch all wallets with ranks
+        ranked_wallets = QrlWalletAddress.objects.annotate(
             rank=Window(expression=Rank(), order_by=F('address_balance').desc())
-        ).filter(wallet_address=wallet).values(
+        ).values(
             'wallet_address', 'address_balance', 'wallet_custom_name', 'rank', 'address_first_found', 'wallet_type'
         )
 
-        wallet_data = list(qs_wallet)
+        # Filter for the specific wallet after ranking
+        wallet_data = [w for w in ranked_wallets if w['wallet_address'] == wallet]
+
         if not wallet_data:
             raise Http404("Wallet not found.")
 
