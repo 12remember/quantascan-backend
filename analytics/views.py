@@ -69,18 +69,20 @@ class BlockStatisticsView(APIView):
 
         # Fetch the emission from external API
         try:
-            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5)
+            headers = {"User-Agent": "QuantascanBot/1.0"}
+            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5, headers=headers)
+
             if emission_response.ok:
                 emission_data = emission_response.json()
                 emission = emission_data.get("emission", 0)
                 emission_clean = int(float(emission) * 1e9)
                 missing_quanta = emission_clean - total_quanta_in_wallets
             else:
-                emission = 0
+                emission_clean = 0
                 missing_quanta = 1000000000
         except Exception as e:
             print("Error fetching emission:", e)
-            emission = 0
+            emission_clean = 0
             missing_quanta = 1000000000
 
 
@@ -175,7 +177,9 @@ class walletDistribution(APIView):
 
 
         try:
-            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5)
+            headers = {"User-Agent": "QuantascanBot/1.0"}
+            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5, headers=headers)
+
             if emission_response.ok:
                 emission_data = emission_response.json()
                 emission = float(emission_data.get("emission", 0))

@@ -34,4 +34,5 @@ CSRF_TRUSTED_ORIGINS = [
     "https://quantascan.io",
     'https://analytics.quantascan.io',
     '.herokuapp.com',  # <--- allow all herokuapp subdomains
+    'https://explorer.theqrl.org',
 ]
