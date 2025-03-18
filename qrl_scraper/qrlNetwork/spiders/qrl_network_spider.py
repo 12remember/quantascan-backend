@@ -6,6 +6,7 @@ import psycopg2
 import json
 import traceback
 import sys
+import requests
 from scrapy.spidermiddlewares.httperror import HttpError
 from twisted.internet.error import DNSLookupError, TimeoutError, TCPTimedOutError
 
@@ -15,6 +16,7 @@ from ..items import (
     QRLNetworkTransactionItem,
     QRLNetworkAddressItem,
     QRLNetworkMissedItem,
+    QRLNetworkEmissionItem,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -36,7 +38,35 @@ class QRLNetworkSpider(scrapy.Spider):
         self.logger.info(f"Initialized spider with retry mode: {self.retry}") 
         self.connection, self.cur = get_db_connection()
         self.requested_wallets = set()  # Track wallet URLs already requested
+        # Fetch & store the emission before starting scraping
+        self.update_emission()
+ 
+    def update_emission(self):
+        """Fetch emission data and return it as an item."""
+        try:
+            self.logger.info(f"Emission updating...")
+            headers = {"User-Agent": "QuantascanBot/1.0"}
+            response = requests.get("https://explorer.theqrl.org/api/emission", timeout=10, headers=headers)
 
+            if response.ok:
+                emission_data = response.json()
+                emission_clean = int(float(emission_data.get("emission", 0)) * 1e9)  # Convert to atomic units
+
+                item = QRLNetworkEmissionItem()
+                item["emission"] = emission_clean
+
+                self.logger.info(f"Emission updated: {emission_clean}")
+                return item  # ✅ Return the item instead of yielding
+
+            else:
+                self.logger.warning("Emission API request failed, using last stored value.")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching emission: {e}")
+            return None
+
+    
     def start_requests(self):
         """
         Start requests based on mode:
@@ -50,6 +80,9 @@ class QRLNetworkSpider(scrapy.Spider):
         logging.getLogger('scrapy.core.scraper').setLevel(logging.INFO)
         logging.getLogger('scrapy.core.engine').setLevel(logging.INFO)
         logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
+        emission_item = self.update_emission()
+        if emission_item:
+            yield emission_item 
 
         if self.retry == "transactions":
             self.logger.info("Retry mode: Fetching failed transactions.")

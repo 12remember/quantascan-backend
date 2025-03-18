@@ -28,6 +28,25 @@ from .serializers import *
 import numpy as np 
 from django.db.models import Max
 
+
+def get_latest_emission():
+    """Fetch the latest emission value from the database."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT emission FROM public."qrl_blockchain_emission" ORDER BY updated_at DESC LIMIT 1'
+            )
+            result = cursor.fetchone()
+            if result:
+                return int(result[0])  # Ensure it returns an integer
+            else:
+                return 0  # Default if no record found
+    except Exception as e:
+        print(f"Database error fetching emission: {e}")
+        return 0  # Default if an error occurs
+
+
+
 class BlockStatisticsView(APIView):
     @method_decorator(cache_page(5 * 60))
     def get(self, request, format=None):
@@ -67,23 +86,14 @@ class BlockStatisticsView(APIView):
             total_quanta=Sum('address_balance')
         )['total_quanta'] or 0
 
-        # Fetch the emission from external API
         try:
-            headers = {"User-Agent": "QuantascanBot/1.0"}
-            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5, headers=headers)
-
-            if emission_response.ok:
-                emission_data = emission_response.json()
-                emission = emission_data.get("emission", 0)
-                emission_clean = int(float(emission) * 1e9)
-                missing_quanta = emission_clean - total_quanta_in_wallets
-            else:
-                emission_clean = 0
-                missing_quanta = 1000000000
+            emission_clean = get_latest_emission()  # Fetch emission from database
+            missing_quanta = emission_clean - total_quanta_in_wallets
         except Exception as e:
-            print("Error fetching emission:", e)
+            print(f"Error fetching emission from database: {e}")
             emission_clean = 0
-            missing_quanta = 1000000000
+            missing_quanta = 1000000000  # Default value in case of an error
+
 
 
 
@@ -177,17 +187,10 @@ class walletDistribution(APIView):
 
 
         try:
-            headers = {"User-Agent": "QuantascanBot/1.0"}
-            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5, headers=headers)
-
-            if emission_response.ok:
-                emission_data = emission_response.json()
-                emission = float(emission_data.get("emission", 0))
-                emission_clean = int(emission * 1e9)  # Convert to atomic units
-            else:
-                emission_clean = 0
-        except:
-            emission_clean = 0
+            emission_clean = get_latest_emission()  # Fetch emission from database
+        except Exception as e:
+            print(f"Error fetching emission from database: {e}")
+            emission_clean = 0  # Fallback if an error occurs
 
         # Ensure all wallets have a category, default to 'Private'
         df_total['wallet_type'] = df_total['wallet_type'].fillna('Private')

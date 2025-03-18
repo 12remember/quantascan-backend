@@ -14,6 +14,7 @@ from .items import (
     QRLNetworkTransactionItem,
     QRLNetworkAddressItem,
     QRLNetworkMissedItem,
+    QRLNetworkEmissionItem,
 )
 # Zorg dat je zowel get_db_connection als db_cursor importeert.
 from .utils import get_db_connection, db_cursor, list_integer_to_hex
@@ -58,6 +59,35 @@ def handle_spider_error(spider, error, item, item_url="N/A"):
     except Exception as e:
         # Als er hier een fout optreedt, log deze dan ook.
         logging.error(f"Critical error logging to missed items table: {e}")
+
+
+class QrlnetworkPipeline_Emission:
+    def process_item(self, item, spider):
+        """Processes and stores emission data in the database."""
+        if not isinstance(item, QRLNetworkEmissionItem):
+            return item
+
+        try:
+            datetimeNow = datetime.now(timezone.utc)
+            with db_cursor() as (conn, cur):
+                # Store or update emission data
+                cur.execute(
+                    """
+                    INSERT INTO public."qrl_blockchain_emission" ("id", "emission", "updated_at")
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT ("id") DO UPDATE 
+                    SET "emission" = EXCLUDED.emission, "updated_at" = EXCLUDED.updated_at
+                    """,
+                    (1, item["emission"], datetimeNow),
+                )
+                conn.commit()
+                logging.info(f"Stored/Updated Emission: {item['emission']} at {datetimeNow}")
+        
+        except (Exception, psycopg2.Error) as error:
+            spider.logger.error(f"Database error in QrlnetworkPipeline_Emission: {error}")
+            raise DropItem(f"Error storing emission data: {error}")
+
+        return item
 
 
 class QrlnetworkPipeline_block:

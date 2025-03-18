@@ -106,3 +106,22 @@ class QRLNetworkMissedItem(scrapy.Item):
     pass        
 
 
+class QRLNetworkMissedItem(scrapy.Item):
+    spider_name = scrapy.Field()
+    spider_version = scrapy.Field()
+    location_script_file = scrapy.Field()
+    location_script_function = scrapy.Field()    
+    trace_back = scrapy.Field()
+    error_type = scrapy.Field()
+    error_name = scrapy.Field()
+    item_url = scrapy.Field()
+    error_timestamp = scrapy.Field()
+    failed_data = scrapy.Field()
+    
+        
+    pass        
+
+
+class QRLNetworkEmissionItem(scrapy.Item):
+    emission = scrapy.Field()
+    updated_at = scrapy.Field()

@@ -159,3 +159,17 @@ class QrlWalletAddress(models.Model):
     class Meta:
         managed = True
         db_table = 'qrl_wallet_address'
+
+
+
+
+class QrlBlockchainEmission(models.Model):
+    emission = models.BigIntegerField(default=0)  # Store emission in atomic units (1e9)
+    updated_at = models.DateTimeField(auto_now=True)  # Track last update timestamp
+
+    class Meta:
+        managed = True
+        db_table = 'qrl_blockchain_emission'
+
+    def __str__(self):
+        return f"Emission: {self.emission} | Last Updated: {self.updated_at}"

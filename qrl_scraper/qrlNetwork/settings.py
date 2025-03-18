@@ -60,6 +60,7 @@ COOKIES_ENABLED = False
 
 # Configure item pipelines
 ITEM_PIPELINES = {
+    'qrlNetwork.pipelines.QrlnetworkPipeline_Emission': 200,
     'qrlNetwork.pipelines.QrlnetworkPipeline_block': 300,
     'qrlNetwork.pipelines.QrlnetworkPipeline_transaction': 300,
     'qrlNetwork.pipelines.QrlnetworkPipeline_address': 300,
