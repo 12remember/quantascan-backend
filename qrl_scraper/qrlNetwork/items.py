@@ -49,9 +49,16 @@ class QRLNetworkTransactionItem(scrapy.Item):
     master_addr_fee = scrapy.Field()
     public_key_type = scrapy.Field()
     public_key_data = scrapy.Field()
+    signature_data = scrapy.Field()
     signature_type = scrapy.Field()
     transaction_nonce = scrapy.Field()
     transaction_addrs_to_type = scrapy.Field()
+    initial_balance = scrapy.Field()
+    initial_balance_address = scrapy.Field()
+    token_symbol = scrapy.Field()
+    token_name = scrapy.Field()
+    token_owner = scrapy.Field()
+    token_decimals = scrapy.Field()
 
 
     item_url =scrapy.Field()           
@@ -90,9 +97,11 @@ class QRLNetworkMissedItem(scrapy.Item):
     location_script_function = scrapy.Field()    
     trace_back = scrapy.Field()
     error_type = scrapy.Field()
-    error = scrapy.Field()
+    error_name = scrapy.Field()
     item_url = scrapy.Field()
     error_timestamp = scrapy.Field()
+    failed_data = scrapy.Field()
+    
         
     pass        
 

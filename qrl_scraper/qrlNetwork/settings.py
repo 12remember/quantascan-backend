@@ -12,7 +12,7 @@
 import os
 import psycopg2
 import environ
-
+import logging
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # Adjusted for `qrlNetwork`
 env = environ.Env()
@@ -26,7 +26,12 @@ NEWSPIDER_MODULE = 'qrlNetwork.spiders'
 # Determine environment
 DJANGO_ENV = env("DJANGO_ENV", default="development")
 USE_PROD_DB = env.bool("USE_PROD_DB", default="False")
-LOG_LEVEL = 'INFO'
+LOG_LEVEL = 'ERROR'
+
+
+
+logging.getLogger('scrapy.core.scraper').setLevel(logging.INFO)
+logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
 
 
 
@@ -49,7 +54,7 @@ CONCURRENT_REQUESTS = 32
 # Configure a delay for requests for the same website (default: 0)
 #DOWNLOAD_DELAY = 0.0  # 0.07
 CONCURRENT_REQUESTS_PER_DOMAIN = 32
-
+REACTOR_THREADPOOL_MAXSIZE = 20
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False
 
@@ -62,16 +67,14 @@ ITEM_PIPELINES = {
 }
 
 # Enable logging for debugging (optional)
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'root': {
-        'handlers': ['console'],
-        'level': 'DEBUG',
-    },
+SPIDER_MIDDLEWARES = {
+    'scrapy.spidermiddlewares.httperror.HttpErrorMiddleware': 50,
+    'scrapy.spidermiddlewares.referer.RefererMiddleware': 100,
 }
+
+DOWNLOADER_MIDDLEWARES = {
+    'scrapy.downloadermiddlewares.downloadtimeout.DownloadTimeoutMiddleware': 50,
+    'scrapy.downloadermiddlewares.useragent.UserAgentMiddleware': 100,
+}
+
+

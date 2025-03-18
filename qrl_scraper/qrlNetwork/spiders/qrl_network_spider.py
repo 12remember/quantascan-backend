@@ -1,8 +1,6 @@
 import os
 import scrapy
-import logging
 import re
-
 import logging
 import psycopg2
 import json
@@ -11,7 +9,7 @@ import sys
 from scrapy.spidermiddlewares.httperror import HttpError
 from twisted.internet.error import DNSLookupError, TimeoutError, TCPTimedOutError
 
-from ..utils import get_db_connection, scrap_url
+from ..utils import get_db_connection, scrap_url, list_integer_to_hex
 from ..items import (
     QRLNetworkBlockItem,
     QRLNetworkTransactionItem,
@@ -23,31 +21,36 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DOCUMENT_DIR = os.path.join(PROJECT_ROOT, "Documenten")
 
 
-def list_integer_to_hex(list_of_ints):
-    array = bytearray(list_of_ints)
-    return bytearray.hex(array)
-
 def list_integer_to_string(data_list):
     return bytearray(data_list).decode()
-
+logging.getLogger('scrapy.core.scraper').setLevel(logging.ERROR)
 
 class QRLNetworkSpider(scrapy.Spider):
     name = "qrl_network_spider"
     version = "0.25"
     start_urls = ["https://zeus-proxy.automated.theqrl.org/grpc/mainnet/GetNodeState"]
 
-    def __init__(self, retry="", *args, **kwargs):
+    def __init__(self, retry=None, *args, **kwargs):
         super(QRLNetworkSpider, self).__init__(*args, **kwargs)
         self.retry = retry  # Activate retry mode if specified
+        self.logger.info(f"Initialized spider with retry mode: {self.retry}") 
         self.connection, self.cur = get_db_connection()
+        self.requested_wallets = set()  # Track wallet URLs already requested
 
     def start_requests(self):
         """
         Start requests based on mode:
-          - retry=transactions -> Retry mode for failed transactions
-          - retry=check-blocks-missing-transactions -> Check for blocks that are older than 2 days & missing transactions
-          - else -> Normal mode
+            - scrapy crawl qrl_network_spider -a retry=transactions (retry failed transactions)
+            - scrapy crawl qrl_network_spider -a retry=check-blocks-missing-transactions (rescrape incomplete blocks)
+            - scrapy crawl qrl_network_spider -a block=12345 (rescrape a specific block)
+            - scrapy crawl qrl_network_spider -a block=all (rescrape all blocks)
+            - Normal mode if no arguments are provided
         """
+
+        logging.getLogger('scrapy.core.scraper').setLevel(logging.INFO)
+        logging.getLogger('scrapy.core.engine').setLevel(logging.INFO)
+        logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
+
         if self.retry == "transactions":
             self.logger.info("Retry mode: Fetching failed transactions.")
             failed_urls = self.get_failed_urls()
@@ -91,6 +94,35 @@ class QRLNetworkSpider(scrapy.Spider):
                         errback=self.errback_conn,
                         meta={"block_number": block_number, "retry_mode": self.retry},
                     )
+        elif hasattr(self, "block"):
+            if self.block.lower() == "all":
+                self.logger.info("Rescraping all blocks")
+
+                # Fetch the latest block number from the API
+                self.cur.execute('SELECT MAX("block_number") FROM public."qrl_blockchain_blocks"')
+                latest_block_number = self.cur.fetchall()[0][0] or 0
+                if latest_block_number is None:
+                    self.logger.error("Failed to get latest block number, cannot proceed with full rescrape.")
+                    return
+
+                for block_number in reversed(range(0, latest_block_number + 1)):  # Rescrape all blocks
+                    yield scrapy.Request(
+                        url=f"{scrap_url}/api/block/{block_number}",
+                        callback=self.parse_block,
+                        errback=self.errback_conn,
+                        meta={"block_number": block_number},
+                    )
+
+            elif self.block.isdigit():
+                block_number = int(self.block)
+                self.logger.info(f"Rescraping block {block_number}")
+
+                yield scrapy.Request(
+                    url=f"{scrap_url}/api/block/{block_number}",
+                    callback=self.parse_block,
+                    errback=self.errback_conn,
+                    meta={"block_number": block_number},
+                )
 
         else:
             # Normal spider behavior
@@ -126,10 +158,10 @@ class QRLNetworkSpider(scrapy.Spider):
         """
         try:
             query = """
-            SELECT "block_number", "block_found_datetime", "block_number_of_transactions"
+            SELECT DISTINCT ON ("block_number") "block_number", "block_found_datetime", "block_number_of_transactions"
             FROM public."qrl_blockchain_blocks"
-            WHERE
-                got_all_transactions = false
+            WHERE 
+                (got_all_transactions = false OR got_all_transactions IS NULL)
                 AND EXTRACT(EPOCH FROM "block_found_datetime") < (EXTRACT(EPOCH FROM NOW()) - 2*24*3600)
             ORDER BY "block_number" ASC
             """
@@ -146,17 +178,17 @@ class QRLNetworkSpider(scrapy.Spider):
         """
         try:
             query = """
-            SELECT COUNT(DISTINCT ("transaction_hash", "transaction_receiving_wallet_address"))
+            SELECT COUNT(DISTINCT "transaction_hash")
             FROM public."qrl_blockchain_transactions"
             WHERE "transaction_block_number" = %s;
             """
             self.cur.execute(query, (block_number,))
-            result = self.cur.fetchone()  # Use fetchone() instead of fetchall()
-            
-            return result[0] if result else 0  # Extract integer safely
+            result = self.cur.fetchone()
+            return result[0] if result else 0
         except psycopg2.Error as e:
             self.logger.error(f"Database error in get_transaction_count_for_block: {e}")
             return 0
+
 
 
     def mark_block_as_completed(self, block_number):
@@ -248,7 +280,7 @@ class QRLNetworkSpider(scrapy.Spider):
 
         except Exception as error:
             self.logger.error(f"Error in parse: {error}")
-            self.handle_error(response, error)
+            yield self.handle_error(response, error)
 
     def parse_block(self, response):
         item_block = QRLNetworkBlockItem()
@@ -285,6 +317,7 @@ class QRLNetworkSpider(scrapy.Spider):
             item_block["block_merkle_root_data"] = list_integer_to_hex(block_merkle_root["data"])
 
             item_block["block_number"] = block_extended_header["block_number"]
+            self.logger.info(f"block: { item_block['block_number']}")
             item_block["block_found_datetime"] = block_extended_header["timestamp_seconds"]
             item_block["block_found_timestamp_seconds"] = block_extended_header["timestamp_seconds"]
 
@@ -328,254 +361,342 @@ class QRLNetworkSpider(scrapy.Spider):
 
         except Exception as error:
             self.logger.error(f"Error in parse_block: {error}")
-            self.handle_error(response, error)
+            yield self.handle_error(response, error)
 
     def parse_transaction(self, response):
         item_transaction = QRLNetworkTransactionItem()
-        json_response = json.loads(response.body)
+
+        try:
+            # Ensure response.body is a valid JSON object
+            json_response = response.body
+            if isinstance(response.body, (str, bytes)):
+                json_response = json.loads(response.body)
+
+            if not isinstance(json_response, dict):
+                self.logger.error(f"Invalid JSON format: {type(json_response)} - {json_response}")
+                return None
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON parsing error in parse_transaction: {e}")
+            return None
+
         item_transaction["item_url"] = response.url
 
         try:
-            transaction = json_response["transaction"]
+            # Validate transaction field
+            transaction = json_response.get("transaction", {})
+            if not isinstance(transaction, dict):
+                self.logger.error(f"Unexpected format for transaction: {type(transaction)} - {transaction}")
+                return None
             
             item_transaction["spider_name"] = self.name
             item_transaction["spider_version"] = self.version
 
-            item_transaction["transaction_result"] = json_response["result"]
-            item_transaction["transaction_found"] = json_response["found"]
+            item_transaction["transaction_result"] = json_response.get("result", "Unknown")
+            item_transaction["transaction_found"] = json_response.get("found", False)
 
-            # transaction > header
-            transaction_header = transaction["header"]
-            # Reconstruct item_block directly
-            reconstructed_item_block = {
-                "block_number": int(transaction_header["block_number"]),
-                "block_found_datetime": int(transaction_header["timestamp_seconds"]),
-                "block_found_timestamp_seconds": int(transaction_header["timestamp_seconds"]),
-            }
+            # Validate transaction_header
+            transaction_header = transaction.get("header", {})
+            if not isinstance(transaction_header, dict):
+                self.logger.error(f"Unexpected format for transaction_header: {type(transaction_header)} - {transaction_header}")
+                return None
 
-            item_transaction["transaction_block_number"] = reconstructed_item_block["block_number"]
-            item_transaction["block_found_datetime"] = reconstructed_item_block["block_found_datetime"]
-            item_transaction["block_found_timestamp_seconds"] = reconstructed_item_block["block_found_timestamp_seconds"]
-
-            # transaction > tx
-            transaction_tx = transaction["tx"]
-            item_transaction["transaction_type"] = transaction_tx["transactionType"]
-            item_transaction["transaction_nonce"] = int(transaction_tx["nonce"])
-
-            # transaction > tx > master_addr
-            master_addr = transaction_tx["master_addr"]
-            item_transaction["master_addr_type"] = master_addr["type"]
-            item_transaction["master_addr_data"] = list_integer_to_hex(master_addr["data"])
-  
-            
-
-            # Extract fee safely
-            fee_value = transaction_tx.get("fee", "0")  # Default to "0" if missing
-
-            # Ensure fee is a valid number
+            # Check if block_number and timestamp are valid numbers
             try:
-                if isinstance(fee_value, str):
-                    fee_value = fee_value.strip()
-                    
-                    # Handle scientific notation (e.g., "1e-9")
-                    if "e" in fee_value.lower():
-                        fee_value = float(fee_value)
+                block_number = int(transaction_header.get("block_number", 0))
+                block_found_datetime = int(transaction_header.get("timestamp_seconds", 0))
+            except (TypeError, ValueError) as e:
+                self.logger.error(f"Invalid data in transaction_header: {e}")
+                return None
 
-                    # Convert valid numeric strings
-                    elif fee_value.replace(".", "", 1).isdigit():
-                        fee_value = float(fee_value)
+            item_transaction["transaction_block_number"] = block_number
+            item_transaction["block_found_datetime"] = block_found_datetime
+            item_transaction["block_found_timestamp_seconds"] = block_found_datetime
 
-                    else:
-                        logging.warning(f"Invalid fee format (string): {fee_value}. Defaulting to 0.")
-                        fee_value = 0
+            # Validate transaction_tx
+            transaction_tx = transaction.get("tx", {})
+            if not isinstance(transaction_tx, dict):
+                self.logger.error(f"Unexpected format for transaction_tx: {type(transaction_tx)} - {transaction_tx}")
+                return None
 
-                elif isinstance(fee_value, float) or isinstance(fee_value, int):
-                    pass  # Already valid
+            item_transaction["transaction_type"] = transaction_tx.get("transactionType", "Unknown")
+            item_transaction["transaction_nonce"] = int(transaction_tx.get("nonce", 0))
 
-                elif isinstance(fee_value, list) or isinstance(fee_value, dict):  # 🚨 Catch unexpected formats
-                    logging.error(f"Unexpected fee format: {type(fee_value)} - {fee_value}. Using default value 0.")
-                    fee_value = 0
+            # Validate master_addr
+            master_addr = transaction_tx.get("master_addr", {})
+            if not isinstance(master_addr, dict):
+                self.logger.error(f"Unexpected format for master_addr: {type(master_addr)} - {master_addr}")
+                master_addr = {}
 
+            item_transaction["master_addr_type"] = master_addr.get("type", "Unknown")
+
+            # Ensure master_addr["data"] is a list before processing
+            master_addr_data = master_addr.get("data", [])
+            if isinstance(master_addr_data, list):
+                item_transaction["master_addr_data"] = list_integer_to_hex(master_addr_data)
+            else:
+                self.logger.error(f"Invalid data format for master_addr['data']: {type(master_addr_data)}")
+                item_transaction["master_addr_data"] = None
+
+            # Validate transaction hash
+            transaction_hash = transaction_tx.get("transaction_hash", {})
+            if isinstance(transaction_hash, str):
+                item_transaction["transaction_hash"] = transaction_hash
+            elif isinstance(transaction_hash, dict) and "data" in transaction_hash:
+                item_transaction["transaction_hash"] = list_integer_to_hex(transaction_hash["data"])
+            else:
+                self.logger.error(f"Unexpected format for transaction_hash: {type(transaction_hash)} - {transaction_hash}")
+                item_transaction["transaction_hash"] = None
+
+            # Validate public_key
+            # Validate public_key
+            public_key = transaction_tx.get("public_key", {})
+
+            # 🚨 Handle case where public_key is a string instead of a dictionary
+            if isinstance(public_key, str):
+                item_transaction["public_key_data"] = public_key  # Store it as-is
+                item_transaction["public_key_type"] = "String"  # Mark it as a string
+            elif isinstance(public_key, dict):
+                item_transaction["public_key_type"] = public_key.get("type", "Unknown")
+                if isinstance(public_key.get("data"), list):
+                    item_transaction["public_key_data"] = list_integer_to_hex(public_key["data"])
                 else:
-                    logging.warning(f"Unknown fee format: {type(fee_value)}. Defaulting to 0.")
-                    fee_value = 0
+                    self.logger.error(f"Invalid public_key['data']: {type(public_key.get('data'))}")
+                    item_transaction["public_key_data"] = None
+            else:
+                self.logger.error(f"Unexpected format for public_key: {type(public_key)} - {public_key}")
+                item_transaction["public_key_data"] = None
 
-                # Convert Quanta to Shor (1 Quanta = 10^9 Shor)
-                fee_value = int(fee_value * 1_000_000_000)
+            # Validate signature
+            signature = transaction_tx.get("signature", {})
 
-            except Exception as e:
-                logging.error(f"Error parsing fee: {e}, Fee Value: {fee_value}")
-                fee_value = 0  # Default to zero if parsing fails
+            # 🚨 Handle case where signature is a string instead of a dictionary
+            if isinstance(signature, str):
+                item_transaction["signature_type"] = "String"  # Mark it as a string
+                item_transaction["signature_data"] = signature  # Store it as-is
+            elif isinstance(signature, dict):
+                item_transaction["signature_type"] = signature.get("type", "Unknown")
+            else:
+                self.logger.error(f"Unexpected format for signature: {type(signature)} - {signature}")
+                item_transaction["signature_type"] = None
 
-            # Store the cleaned fee value
-            item_transaction["master_addr_fee"] = fee_value
-
-
-            # transaction > tx > public_key
-            public_key = transaction_tx["public_key"]
-            item_transaction["public_key_type"] = public_key["type"]
-            item_transaction["public_key_data"] = list_integer_to_hex(public_key["data"])
-
-            # transaction > tx > signature
-            signature = transaction_tx["signature"]
-            item_transaction["signature_type"] = signature["type"]
-
-            # Transfer transaction
-            if transaction_tx["transactionType"] == "transfer":
-                transaction_tx_transfer = transaction_tx["transfer"]
-                amounts_list = transaction_tx_transfer["amounts"]
+            # **Handle Different Transaction Types**
+            if item_transaction["transaction_type"] == "transfer":
+                transaction_tx_transfer = transaction_tx.get("transfer", {})
+                amounts_list = transaction_tx_transfer.get("amounts", [])
 
                 transfer_list = []
                 transfer_type_list = []
 
-                for single_transfer in transaction_tx_transfer["addrs_to"]:
-                    transfer_list.append(list_integer_to_hex(single_transfer["data"]))
-                    transfer_type_list.append(single_transfer["type"])
+                for single_transfer in transaction_tx_transfer.get("addrs_to", []):
+                    if isinstance(single_transfer, dict) and "data" in single_transfer:
+                        transfer_list.append(list_integer_to_hex(single_transfer["data"]))
+                        transfer_type_list.append(single_transfer.get("type", "Unknown"))
 
                 transfer_address_amount_combined = list(zip(transfer_list, amounts_list, transfer_type_list))
 
                 for address_with_amount in transfer_address_amount_combined:
-                    # from
-                    transaction_sending_wallet_address = transaction["addr_from"]
-                    item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(
-                        transaction_sending_wallet_address["data"]
-                    )
-                    # to
+                    transaction_sending_wallet_address = transaction.get("addr_from", {}).get("data", [])
+                    
+                    item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(transaction_sending_wallet_address)
+
                     item_transaction["transaction_receiving_wallet_address"] = "Q" + address_with_amount[0]
                     item_transaction["transaction_amount_send"] = address_with_amount[1]
                     item_transaction["transaction_addrs_to_type"] = address_with_amount[2]
 
-                    # transaction > tx > transaction_hash
-                    transaction_tx_transaction_hash = transaction_tx["transaction_hash"]
-                    item_transaction["transaction_hash"] = list_integer_to_hex(transaction_tx_transaction_hash["data"])
-
                     yield QRLNetworkTransactionItem(item_transaction)
 
-                    for scrape_wallet_url in [
-                        item_transaction["transaction_receiving_wallet_address"],
-                        item_transaction["transaction_sending_wallet_address"],
-                    ]:
-                        yield scrapy.Request(
-                            url=f"{scrap_url}/api/a/{scrape_wallet_url}",
-                            callback=self.parse_address,
-                            errback=self.errback_conn,
-                            meta={"item_transaction": item_transaction},
-                        )
+            elif item_transaction["transaction_type"] == "coinbase":
+                transaction_tx_coinbase = transaction_tx.get("coinbase", {})
+                coinbase_transfer = transaction_tx_coinbase.get("addr_to", {})
 
-            # Coinbase transaction
-            elif transaction_tx["transactionType"] == "coinbase":
-                transaction_tx_coinbase = transaction_tx["coinbase"]
-                coinbase_transfer = transaction_tx_coinbase["addr_to"]
+                transaction_sending_wallet_address = transaction.get("addr_from", {}).get("data", [])
+                item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(transaction_sending_wallet_address)
 
-                transaction_sending_wallet_address = transaction["addr_from"]
-                item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(
-                    transaction_sending_wallet_address["data"]
-                )
-                item_transaction["transaction_receiving_wallet_address"] = "Q" + list_integer_to_hex(
-                    coinbase_transfer["data"]
-                )
-                item_transaction["transaction_amount_send"] = transaction_tx_coinbase["amount"]
-                item_transaction["transaction_addrs_to_type"] = coinbase_transfer["type"]
-
-                coinbase_tx_transaction_hash = transaction_tx["transaction_hash"]
-                item_transaction["transaction_hash"] = list_integer_to_hex(coinbase_tx_transaction_hash["data"])
+                item_transaction["transaction_receiving_wallet_address"] = "Q" + list_integer_to_hex(coinbase_transfer.get("data", []))
+                item_transaction["transaction_amount_send"] = transaction_tx_coinbase.get("amount", "0")
+                item_transaction["transaction_addrs_to_type"] = coinbase_transfer.get("type", "Unknown")
 
                 yield QRLNetworkTransactionItem(item_transaction)
 
-                yield scrapy.Request(
-                    url=f"{scrap_url}/api/a/{item_transaction['transaction_receiving_wallet_address']}",
-                    callback=self.parse_address,
-                    errback=self.errback_conn,
-                    meta={"item_transaction": item_transaction},
-                )
+            elif item_transaction["transaction_type"] == "slave":
+                transaction_tx_slave = transaction_tx.get("slave", {})
+                # Get the master (sending) address from "addr_from"
+                master_data = transaction.get("addr_from", {}).get("data", [])
+                if isinstance(master_data, list) and len(master_data) == 32:
+                    master_address = "Q" + list_integer_to_hex(master_data)
+                else:
+                    master_address = ""  # Use empty string if not valid
 
-            # Slave transaction
-            elif transaction_tx["transactionType"] == "slave":
-                transaction_tx_slave = transaction_tx["slave"]
-                for slave_pk in transaction_tx_slave["slave_pks"]:
-                    transaction_sending_wallet_address = transaction["addr_from"]
-                    item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(
-                        transaction_sending_wallet_address["data"]
-                    )
-                    item_transaction["transaction_receiving_wallet_address"] = "Q" + list_integer_to_hex(
-                        slave_pk["data"]
-                    )
+                # For each slave public key, set the receiving address.
+                for slave_pk in transaction_tx_slave.get("slave_pks", []):
+                    # Check the type of slave_pk and extract slave_data accordingly
+                    if isinstance(slave_pk, dict):
+                        slave_data = slave_pk.get("data", [])
+                    elif isinstance(slave_pk, list):
+                        slave_data = slave_pk
+                    elif isinstance(slave_pk, str):
+                        # If it's already a string, assume it's a valid address
+                        slave_address = slave_pk
+                        item_transaction["transaction_sending_wallet_address"] = master_address
+                        item_transaction["transaction_receiving_wallet_address"] = slave_address
+                        item_transaction["transaction_amount_send"] = 0
+                        item_transaction["transaction_addrs_to_type"] = ""
+                        yield QRLNetworkTransactionItem(item_transaction.copy())
+                        continue  # Proceed to next slave_pk
+                    else:
+                        slave_data = []
+                    
+                    if isinstance(slave_data, list) and len(slave_data) == 32:
+                        slave_address = "Q" + list_integer_to_hex(slave_data)
+                    else:
+                        slave_address = ""  # Fallback to empty string
+                    
+                    item_transaction["transaction_sending_wallet_address"] = master_address
+                    item_transaction["transaction_receiving_wallet_address"] = slave_address
                     item_transaction["transaction_amount_send"] = 0
                     item_transaction["transaction_addrs_to_type"] = ""
-
-                    transaction_tx_transaction_hash = transaction_tx["transaction_hash"]
-                    item_transaction["transaction_hash"] = list_integer_to_hex(
-                        transaction_tx_transaction_hash["data"]
-                    )
-
-                    yield QRLNetworkTransactionItem(item_transaction)
+                    yield QRLNetworkTransactionItem(item_transaction.copy())
 
 
-            # Slave transaction
-            elif transaction_tx["transactionType"] == "token":
-                token_data = transaction_tx["token"]
 
-                # Token initial balance
-                initial_balance = token_data["initial_balances"][0]
-                item_transaction["initial_balance_address"] = "Q" + list_integer_to_hex(initial_balance["address"]["data"])
-                item_transaction["initial_balance"] = initial_balance["amount"]
-
-                # Token metadata
-                item_transaction["token_symbol"] = list_integer_to_string(token_data["symbol"]["data"])
-                item_transaction["token_name"] = list_integer_to_string(token_data["name"]["data"])
-                item_transaction["token_owner"] = "Q" + list_integer_to_hex(token_data["owner"]["data"])
-                item_transaction["token_decimals"] = token_data["decimals"]
+            elif item_transaction["transaction_type"] == "token":
+                token_data = transaction_tx.get("token", {})
+                # Use "initialBalances" if available; fallback to "initial_balances"
+                initial_balances = token_data.get("initialBalances") or token_data.get("initial_balances", [])
+                
+                # Iterate through all recipients
+                receiving_addresses = []
+                for balance_entry in initial_balances:
+                    # Ensure we have a dictionary for each balance entry
+                    if isinstance(balance_entry, dict):
+                        address_field = balance_entry.get("address")
+                        if isinstance(address_field, dict):
+                            data = address_field.get("data", [])
+                            if data:
+                                receiving_addresses.append("Q" + list_integer_to_hex(data))
+                        elif isinstance(address_field, str):
+                            receiving_addresses.append(address_field)
+                
+                item_transaction["transaction_receiving_wallet_address"] = (
+                    ", ".join(receiving_addresses) if receiving_addresses else "UNKNOWN"
+                )
+                item_transaction["initial_balance_address"] = (
+                    receiving_addresses[0] if receiving_addresses else "UNKNOWN"
+                )
+                item_transaction["initial_balance"] = (
+                    initial_balances[0].get("amount", "0") if initial_balances and isinstance(initial_balances[0], dict) else "0"
+                )
+                
+                # For symbol, check if it's a dict (with "data") or a simple string.
+                token_symbol = token_data.get("symbol")
+                if isinstance(token_symbol, dict):
+                    token_symbol = list_integer_to_string(token_symbol.get("data", []))
+                item_transaction["token_symbol"] = token_symbol or "UNKNOWN"
+                
+                # Same for token name.
+                token_name = token_data.get("name")
+                if isinstance(token_name, dict):
+                    token_name = list_integer_to_string(token_name.get("data", []))
+                item_transaction["token_name"] = token_name or "UNKNOWN"
+                
+                # Process token owner (expected to be a dict with "data")
+                token_owner = token_data.get("owner", {})
+                if isinstance(token_owner, dict):
+                    owner_data = token_owner.get("data", [])
+                    item_transaction["token_owner"] = "Q" + list_integer_to_hex(owner_data) if owner_data else "UNKNOWN"
+                elif isinstance(token_owner, str):
+                    item_transaction["token_owner"] = token_owner
+                else:
+                    item_transaction["token_owner"] = "UNKNOWN"
+                
+                # Convert decimals to int if possible
+                token_decimals = token_data.get("decimals")
+                try:
+                    token_decimals = int(token_decimals)
+                except (TypeError, ValueError):
+                    token_decimals = 0
+                item_transaction["token_decimals"] = token_decimals
 
                 yield QRLNetworkTransactionItem(item_transaction)
 
 
-            # If we're in "retry=transactions" mode, remove the error if success
-            if self.retry == "transactions":
-                self.remove_error(response.url)
+            # Ensure we fetch details for both sending & receiving wallet addresses
+            for scrape_wallet_url in [
+                item_transaction.get("transaction_receiving_wallet_address"),
+                item_transaction.get("transaction_sending_wallet_address"),
+            ]:
+                if scrape_wallet_url and scrape_wallet_url not in self.requested_wallets:
+                    self.requested_wallets.add(scrape_wallet_url)
+                    self.logger.info(f"Fetching wallet address details: {scrape_wallet_url}")
+                    yield scrapy.Request(
+                        url=f"{scrap_url}/api/a/{scrape_wallet_url}",
+                        callback=self.parse_address, 
+                        errback=self.errback_conn,
+                        meta={"item_transaction": item_transaction},
+                    )
 
         except Exception as error:
             self.logger.error(f"Error in parse_transaction: {error}")
-            self.handle_error(response, error)
+            yield self.handle_error(response, error)
 
     def parse_address(self, response):
-        item_transaction = response.meta["item_transaction"]
-        item_address = QRLNetworkAddressItem()
-        json_response = json.loads(response.body)
-        item_address["item_url"] = response.url
+        try:    
+            try:
+                json_response = json.loads(response.body)
+            except Exception as e:
+                self.logger.error(f"Error decoding JSON for {response.url}: {e}")
+                return
 
-        try:
-            json_state = json_response["state"]
-
+            # Initialize the address item using the wallet address extracted from the URL.
+            wallet_address = response.url.split("/")[-1]
+            item_address = QRLNetworkAddressItem()
+            item_address["item_url"] = response.url
             item_address["spider_name"] = self.name
             item_address["spider_version"] = self.version
+            item_address["wallet_address"] = wallet_address
 
-            item_address["wallet_address"] = json_state["address"]
-            item_address["address_balance"] = json_state["balance"]
-            item_address["address_nonce"] = json_state["nonce"]
-            item_address["address_ots_bitfield_used_page"] = json_state.get("ots_bitfield_used_page", None)
-            item_address["address_used_ots_key_count"] = json_state["used_ots_key_count"]
-            item_address["address_transaction_hash_count"] = json_state["transaction_hash_count"]
-            item_address["address_tokens_count"] = json_state["tokens_count"]
-            item_address["address_slaves_count"] = json_state["slaves_count"]
-            item_address["address_lattice_pk_count"] = json_state["lattice_pk_count"]
-            item_address["address_multi_sig_address_count"] = json_state["multi_sig_address_count"]
-            item_address["address_multi_sig_spend_count"] = json_state["multi_sig_spend_count"]
-            item_address["address_inbox_message_count"] = json_state["inbox_message_count"]
+            # Always set these keys even if API doesn't include them:
+            item_address["address_foundation_multi_sig_spend_txn_hash"] = json_response.get("state", {}).get("foundation_multi_sig_spend_txn_hash", "")
+            item_address["address_foundation_multi_sig_vote_txn_hash"] = json_response.get("state", {}).get("foundation_multi_sig_vote_txn_hash", "")
+            item_address["address_unvotes"] = json_response.get("state", {}).get("unvotes", "")
+            item_address["address_proposal_vote_stats"] = json_response.get("state", {}).get("proposal_vote_stats", "")
 
-            item_address["address_foundation_multi_sig_spend_txn_hash"] = json_state[
-                "foundation_multi_sig_spend_txn_hash"
-            ]
-            item_address["address_foundation_multi_sig_vote_txn_hash"] = json_state[
-                "foundation_multi_sig_vote_txn_hash"
-            ]
-            item_address["address_unvotes"] = json_state["unvotes"]
-            item_address["address_proposal_vote_stats"] = json_state["proposal_vote_stats"]
+            # If the API indicates the wallet is not found, still yield an item with what we have.
+            if not json_response.get("found", True):
+                self.logger.error(f"API reports wallet {wallet_address} as invalid: {json_response.get('message')}")
+                yield item_address
+                return
 
-            yield QRLNetworkAddressItem(item_address)
+            # If the response is valid but missing the 'state' key, log and yield a partial item.
+            if "state" not in json_response:
+                self.logger.error(f"Missing 'state' in response for wallet {wallet_address}: {json_response}")
+   
+                yield item_address
+                return
+
+            # Process valid response.
+            json_state = json_response["state"]
+            item_address["address_balance"] = json_state.get("balance")
+            item_address["address_nonce"] = json_state.get("nonce")
+            item_address["address_ots_bitfield_used_page"] = json_state.get("ots_bitfield_used_page")
+            item_address["address_used_ots_key_count"] = json_state.get("used_ots_key_count")
+            item_address["address_transaction_hash_count"] = json_state.get("transaction_hash_count")
+            item_address["address_tokens_count"] = json_state.get("tokens_count")
+            item_address["address_slaves_count"] = json_state.get("slaves_count")
+            item_address["address_lattice_pk_count"] = json_state.get("lattice_pk_count")
+            item_address["address_multi_sig_address_count"] = json_state.get("multi_sig_address_count")
+            item_address["address_multi_sig_spend_count"] = json_state.get("multi_sig_spend_count")
+            item_address["address_inbox_message_count"] = json_state.get("inbox_message_count")
+        
+
+
+            yield item_address
+
 
         except Exception as error:
             self.logger.error(f"Error in parse_address: {error}")
-            self.handle_error(response, error)
+            yield self.handle_error(response, error)
+
 
     # -------------------------------------------------------------------------
     #                           ERROR HANDLERS
@@ -592,7 +713,7 @@ class QRLNetworkSpider(scrapy.Spider):
         item_missed["location_script_function"] = str(__class__.__name__) + (", ") + str(sys._getframe().f_code.co_name)
         item_missed["trace_back"] = traceback.format_exc(limit=None, chain=True)
         item_missed["error_type"] = str(type(error))
-        item_missed["error"] = str(error)
+        item_missed["error_name"] = str(error)
         item_missed["item_url"] = response.url
 
         return item_missed 
@@ -609,15 +730,15 @@ class QRLNetworkSpider(scrapy.Spider):
         item_missed["item_url"] = failure.request.url
 
         if failure.check(HttpError):
-            item_missed["error"] = str(failure.__class__)
+            item_missed["error_name"] = str(failure.__class__)
             item_missed["error_type"] = str(failure.value.response)
 
         elif failure.check(DNSLookupError):
-            item_missed["error"] = str(failure.__class__)
+            item_missed["error_name"] = str(failure.__class__)
             item_missed["error_type"] = "DNS Lookup Error"
 
         elif failure.check(TimeoutError, TCPTimedOutError):
-            item_missed["error"] = str(failure.__class__)
+            item_missed["error_name"] = str(failure.__class__)
             item_missed["error_type"] = "Timeout Error"
 
         return item_missed 

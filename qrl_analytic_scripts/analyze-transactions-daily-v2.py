@@ -165,6 +165,29 @@ def save_transaction_analysis_to_database_upsert(df_grouped):
         connection.rollback()
         raise
 
+
+def recalculate_all_transactions():
+    try:
+        print("Recalculating all transaction days from genesis date to now...")
+        # Optionally, clear the existing aggregated data
+        cur.execute('TRUNCATE public."qrl_aggregated_transaction_data"')
+        connection.commit()
+        print("Existing aggregated data cleared.")
+
+        # Fetch all transaction data starting from the genesis date
+        data = fetch_transaction_data(start_date=GENESIS_DATE)
+        if data.empty:
+            print("⚠️ No transaction data found from genesis date onward.")
+            return
+
+        # Analyze and aggregate the entire dataset
+        result = analyze_transactions(data)
+        save_transaction_analysis_to_database_upsert(result)
+        print("✅ Successfully recalculated all transaction days.")
+    except Exception as e:
+        print(f"Error recalculating all transactions: {e}")
+
+
 # Script entry point
 if __name__ == "__main__":
     print("Usage:")

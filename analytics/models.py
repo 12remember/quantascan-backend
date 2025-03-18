@@ -85,6 +85,7 @@ class QrlBlockchainMissedItems(models.Model):
     error_type = models.CharField(max_length=255, blank=True, null=True)
     location_script_file = models.CharField(max_length=255, blank=True, null=True)
     location_script_function = models.CharField(max_length=255, blank=True, null=True)
+    failed_data = models.CharField(max_length=1000, blank=True, null=True)
 
     class Meta:
         managed = True
