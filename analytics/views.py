@@ -1,5 +1,5 @@
 
-from django.db.models import Count, Sum, F
+from django.db.models import Count, Sum, F, Max
 from django.db.models.expressions import Window
 from django.db.models.functions import Rank
 
@@ -20,6 +20,8 @@ from django_pandas.io import read_frame
 import datetime as dt
 from datetime import date, timedelta
 
+import requests
+
 
 from .models import *
 from .serializers import *
@@ -29,10 +31,10 @@ from django.db.models import Max
 class BlockStatisticsView(APIView):
     @method_decorator(cache_page(5 * 60))
     def get(self, request, format=None):
-        # Existing logic for blocks
+        # Block statistics
         highest_block_number = QrlBlockchainBlocks.objects.aggregate(
             max_block_number=Max('block_number')
-        )['max_block_number']
+        )['max_block_number'] or 0
 
         total_rows = QrlBlockchainBlocks.objects.count()
         adjusted_rows = total_rows - 1 if total_rows > 0 else 0  # block 0 vs row 1
@@ -42,21 +44,17 @@ class BlockStatisticsView(APIView):
         )
         missing_blocks = highest_block_number - adjusted_rows if highest_block_number and adjusted_rows >= 0 else 0
 
-        # 1. Sum of all transactions recorded in blocks
+        # Transaction statistics
         total_transactions_in_blocks = QrlBlockchainBlocks.objects.aggregate(
             total_tx_in_blocks=Sum('block_number_of_transactions')
         )['total_tx_in_blocks'] or 0
 
-        # 2. Actual transactions in the transactions table (counting only unique transaction_hash)
         total_transactions_in_database = QrlBlockchainTransactions.objects.values(
             'transaction_hash'
         ).distinct().count()
 
-
-        # 3. Missing transactions (if any)
         missing_transactions = total_transactions_in_blocks - total_transactions_in_database
 
-        # 4. Compliance for transactions
         if total_transactions_in_blocks > 0:
             compliance_percentage_transactions = round(
                 (total_transactions_in_database / total_transactions_in_blocks) * 100, 2
@@ -64,17 +62,44 @@ class BlockStatisticsView(APIView):
         else:
             compliance_percentage_transactions = 0
 
+        # Wallet statistics: Sum of all wallet balances
+        total_quanta_in_wallets = QrlWalletAddress.objects.aggregate(
+            total_quanta=Sum('address_balance')
+        )['total_quanta'] or 0
+
+        # Fetch the emission from external API
+        try:
+            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5)
+            if emission_response.ok:
+                emission_data = emission_response.json()
+                emission = emission_data.get("emission", 0)
+                emission_clean = int(float(emission) * 1e9)
+                missing_quanta = emission_clean - total_quanta_in_wallets
+            else:
+                emission = 0
+                missing_quanta = 1000000000
+        except Exception as e:
+            print("Error fetching emission:", e)
+            emission = 0
+            missing_quanta = 1000000000
+
+
+
         return Response({
-            # Existing fields
+            # Block stats
             'highest_block_number': highest_block_number,
             'total_rows': adjusted_rows,
             'compliance_percentage': compliance_percentage,
             'missing_blocks': missing_blocks,
-            # New transaction stats
+            # Transaction stats
             'total_transactions_in_blocks': total_transactions_in_blocks,
             'total_transactions_in_database': total_transactions_in_database,
             'missing_transactions': missing_transactions,
             'compliance_percentage_transactions': compliance_percentage_transactions,
+            # Wallet stats
+            'total_quanta_in_wallets': total_quanta_in_wallets,
+            'emission': emission_clean,
+            'missing_quanta': missing_quanta,
         })
 
 
@@ -99,7 +124,7 @@ class walletRichList(APIView):
 class walletDistribution(APIView):
     @method_decorator(cache_page(60*60))
     def get(self, request, format=None, *args, **kwargs):
-        qs = QrlWalletAddress.objects.values('address_balance').annotate(rank=Window(expression=Rank(),order_by=F('address_balance').desc()))                
+        qs = QrlWalletAddress.objects.values('wallet_address','address_balance', 'wallet_type', 'wallet_custom_name').annotate(rank=Window(expression=Rank(),order_by=F('address_balance').desc()))                
         df_total = read_frame(qs)
         
         totalnumber_wallets = df_total['address_balance'].count()
@@ -148,15 +173,67 @@ class walletDistribution(APIView):
 
         df_grouped = df_grouped[['address_balance_list', 'address_balance_group_list']]
 
+
+        try:
+            emission_response = requests.get("https://explorer.theqrl.org/api/emission", timeout=5)
+            if emission_response.ok:
+                emission_data = emission_response.json()
+                emission = float(emission_data.get("emission", 0))
+                emission_clean = int(emission * 1e9)  # Convert to atomic units
+            else:
+                emission_clean = 0
+        except:
+            emission_clean = 0
+
+        # Ensure all wallets have a category, default to 'Private'
+        df_total['wallet_type'] = df_total['wallet_type'].fillna('Private')
+        df_total.loc[df_total['wallet_type'] == '', 'wallet_type'] = 'Private'
+
+        # **Wallet Categories Statistics**
+        wallet_category_types = ['Exchange', 'Private', 'Others']
+        wallet_categories_stats = []
+
+        # Extract only exchange wallets
+        exchange_wallets = df_total[df_total['wallet_type'] == 'Exchange']
+
+        # Format exchange wallet data
+        exchange_addresses = exchange_wallets[['wallet_address', 'wallet_custom_name', 'address_balance']].to_dict(orient='records')
+
+
+        # Compute known total balance
+        total_known_balance = df_total['address_balance'].sum()
+        unknown_balance = max(0, emission_clean - total_known_balance)  # Prevent negative values
+
+        for category in wallet_category_types:
+            df_category = df_total[df_total['wallet_type'] == category]
+            total_value = df_category['address_balance'].sum()
+            percentage_of_supply = (total_value / emission_clean) * 100 if emission_clean > 0 else 0
+            wallet_categories_stats.append({
+                "name": category,
+                "count": len(df_category),
+                "total_value": total_value,
+                "percentage": round(percentage_of_supply, 2)
+            })
+
+        # Add 'Unknown' category
+        wallet_categories_stats.append({
+            "name": "Unknown",
+            "count": "N/A",  # No specific count since it's inferred
+            "total_value": unknown_balance,
+            "percentage": round((unknown_balance / emission_clean) * 100, 2) if emission_clean > 0 else 0
+        })
+
         return Response({
-        'distribution_percentage':{
-        'percentage_owned':df_perct['percentage_owned'],
-        'volume_owned':df_perct['volume_owned'],
-        },
-        'distribution_percentile': df_grouped,
-        'distribution_wallets_holding_x':totalnumber_wallets_with_balance_x,
-        
-        }) 
+            'distribution_percentage': {
+                'percentage_owned': df_perct['percentage_owned'],
+                'volume_owned': df_perct['volume_owned'],
+            },
+            'distribution_percentile': df_grouped,
+            'distribution_wallets_holding_x': totalnumber_wallets_with_balance_x,
+            'wallet_categories_stats': wallet_categories_stats,
+            'exchange_addresses': exchange_addresses, 
+            'emission': emission_clean,
+        })
 
         
 class walletNumberOfWallets(APIView):
