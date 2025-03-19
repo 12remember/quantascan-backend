@@ -138,7 +138,7 @@ class QRLNetworkSpider(scrapy.Spider):
                     self.logger.error("Failed to get latest block number, cannot proceed with full rescrape.")
                     return
 
-                for block_number in reversed(range(0, latest_block_number + 1)):  # Rescrape all blocks
+                for block_number in range(0, latest_block_number + 1):  # reversed()  # Rescrape all blocks
                     yield scrapy.Request(
                         url=f"{scrap_url}/api/block/{block_number}",
                         callback=self.parse_block,

@@ -19,6 +19,8 @@ import pandas as pd
 from django_pandas.io import read_frame
 import datetime as dt
 from datetime import date, timedelta
+import math
+from dateutil.relativedelta import relativedelta
 
 import requests
 
@@ -197,7 +199,7 @@ class walletDistribution(APIView):
         df_total.loc[df_total['wallet_type'] == '', 'wallet_type'] = 'Private'
 
         # **Wallet Categories Statistics**
-        wallet_category_types = ['Exchange', 'Private', 'Others']
+        wallet_category_types = ['Exchange', 'Private', 'Others', 'Mining']
         wallet_categories_stats = []
 
         # Extract only exchange wallets
@@ -205,6 +207,13 @@ class walletDistribution(APIView):
 
         # Format exchange wallet data
         exchange_addresses = exchange_wallets[['wallet_address', 'wallet_custom_name', 'address_balance']].to_dict(orient='records')
+
+
+        # Extract only exchange wallets
+        mining_wallets = df_total[df_total['wallet_type'] == 'Exchange']
+
+        # Format exchange wallet data
+        mining_addresses = mining_wallets[['wallet_address', 'wallet_custom_name', 'address_balance']].to_dict(orient='records')
 
 
         # Compute known total balance
@@ -238,7 +247,8 @@ class walletDistribution(APIView):
             'distribution_percentile': df_grouped,
             'distribution_wallets_holding_x': totalnumber_wallets_with_balance_x,
             'wallet_categories_stats': wallet_categories_stats,
-            'exchange_addresses': exchange_addresses, 
+            'exchange_addresses': exchange_addresses,
+            'mining_addresses': mining_addresses, 
             'emission': emission_clean,
         })
 
@@ -618,66 +628,62 @@ class donationData(APIView):
 class blockRewardDecay(APIView):
     @method_decorator(cache_page(60 * 60 * 12))
     def get(self, request, format=None, *args, **kwargs):
-        import datetime as dt
-        import pandas as pd
-        from django_pandas.io import read_frame
-
-        # 1. Fetch DB rows for your data
+        # 1. Fetch data from the DB
         qs = QrlAggregatedBlockData.objects.values('date', 'block_reward_block_mean')
         df_total = read_frame(qs)
 
-        # 2. Adjust your existing DataFrame
-        # Remove first day
+        # 2. Preprocess the DataFrame
+        # Skip the very first day (if needed) and remove the last row to avoid partial day effects
         df_total = df_total[1:]
-        # Convert from 'shor' to 'quanta'
+        # Convert from “shor” to “quanta”
         df_total["block_reward_block_mean"] = df_total['block_reward_block_mean'] / 1_000_000_000
-        # Remove last row (so partial day doesn't skew averages)
         df_total = df_total.iloc[:-1]
 
-        # ----------------------------------------------------------------------
-        # 3. Dynamically compute monthly decay predictions
-        # ----------------------------------------------------------------------
-        # For example: 120 months from 2018-06-26, 1% monthly decay
-        months_count = 2400  # 10 years
-        initial_reward = 6.654  # start value
-        decay_rate = 0.982      # 1% monthly decay
+        # 3. Compute monthly decay predictions using an exponential decay model
+        # Parameters (adjust these to your emission decay model):
+        months_count = 2400          # e.g., predict for 10 years (120 months)
+        initial_reward = 6.654       # starting average block reward (in quanta)
+        exponent_per_block = 1.66e-7 # decay constant per block (from your emission decay data)
+        average_block_time = 60      # average block time in seconds (assumption)
 
-        # Generate a monthly date range
+        # We generate a monthly date range and compute the cumulative number of blocks
+        # in each period to use in our exponential decay formula.
+        prediction_dates = []
+        reward_estimates = []
+        start_date = pd.Timestamp('2018-06-26')
+        current_date = start_date
+        cumulative_blocks = 0
+
+        for i in range(months_count):
+            next_date = current_date + relativedelta(months=1)
+            # Calculate seconds in the current month and estimate the number of blocks
+            seconds_in_month = (next_date - current_date).total_seconds()
+            blocks_in_month = seconds_in_month / average_block_time
+            cumulative_blocks += blocks_in_month
+
+            # Calculate decayed reward using the exponential formula:
+            # reward = initial_reward * exp(-exponent_per_block * cumulative_blocks)
+            reward = initial_reward * math.exp(-exponent_per_block * cumulative_blocks)
+
+            prediction_dates.append(current_date)
+            reward_estimates.append(reward)
+
+            current_date = next_date
+
         df_prediction = pd.DataFrame({
-            'date': pd.date_range(
-                start='2018-06-26',
-                periods=months_count,
-                freq='ME'  # monthly intervals
-            )
+            'date': prediction_dates,
+            'block_reward_block_mean': reward_estimates,
         })
 
-        # Compute the decayed reward for each month: reward_i = initial_reward * decay_rate^i
-        list_with_estimates = [
-            initial_reward * (decay_rate ** i) 
-            for i in range(months_count)
-        ]
-        df_prediction["block_reward_block_mean"] = list_with_estimates
+        # 4. Convert date columns to milliseconds since the Unix epoch
+        df_total["date"] = (df_total["date"] - dt.datetime(1970, 1, 1)).dt.total_seconds() * 1000
+        df_prediction["date"] = (df_prediction["date"] - dt.datetime(1970, 1, 1)).dt.total_seconds() * 1000
 
-        # ----------------------------------------------------------------------
-        # 4. Convert `date` columns to milliseconds since epoch
-        # ----------------------------------------------------------------------
-        df_total["date"] = (
-            df_total["date"] - dt.datetime(1970, 1, 1)
-        ).dt.total_seconds() * 1000
-
-        df_prediction["date"] = (
-            df_prediction["date"] - dt.datetime(1970, 1, 1)
-        ).dt.total_seconds() * 1000
-
-        # ----------------------------------------------------------------------
-        # 5. Convert to dictionaries for serialization
-        # ----------------------------------------------------------------------
+        # 5. Prepare the data for JSON serialization
         chart_data_point_list = df_total.to_dict('records')
         chart_data_point_list_prediction = df_prediction.to_dict('records')
 
-        # ----------------------------------------------------------------------
-        # 6. Return both in the response
-        # ----------------------------------------------------------------------
+        # 6. Return the data in the API response
         return Response({
             'chart_data_point_list': chart_data_point_list,
             'chart_data_point_list_prediction': chart_data_point_list_prediction,
