@@ -74,12 +74,24 @@ class QRLNetworkSpider(scrapy.Spider):
             - scrapy crawl qrl_network_spider -a retry=check-blocks-missing-transactions (rescrape incomplete blocks)
             - scrapy crawl qrl_network_spider -a block=12345 (rescrape a specific block)
             - scrapy crawl qrl_network_spider -a block=all (rescrape all blocks)
+            - scrapy crawl qrl_network_spider -a wallet=Q01234…
             - Normal mode if no arguments are provided
         """
 
-        logging.getLogger('scrapy.core.scraper').setLevel(logging.INFO)
-        logging.getLogger('scrapy.core.engine').setLevel(logging.INFO)
-        logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
+        #logging.getLogger('scrapy.core.scraper').setLevel(logging.INFO)
+        #logging.getLogger('scrapy.core.engine').setLevel(logging.INFO)
+        #logging.getLogger('scrapy.middleware').setLevel(logging.WARNING)
+
+        if hasattr(self, "wallet") and self.wallet:
+            self.logger.info(f"Searching for wallet: {self.wallet}")
+            yield scrapy.Request(
+                url=f"{scrap_url}/api/a/{self.wallet}",
+                callback=self.parse_address,
+                errback=self.errback_conn,
+                meta={"wallet_search": True},
+            )
+            return  # Exit; only search for the specified wallet
+
         emission_item = self.update_emission()
         if emission_item:
             yield emission_item 
@@ -420,7 +432,7 @@ class QRLNetworkSpider(scrapy.Spider):
             if not isinstance(transaction, dict):
                 self.logger.error(f"Unexpected format for transaction: {type(transaction)} - {transaction}")
                 return None
-            
+
             item_transaction["spider_name"] = self.name
             item_transaction["spider_version"] = self.version
 
@@ -433,7 +445,6 @@ class QRLNetworkSpider(scrapy.Spider):
                 self.logger.error(f"Unexpected format for transaction_header: {type(transaction_header)} - {transaction_header}")
                 return None
 
-            # Check if block_number and timestamp are valid numbers
             try:
                 block_number = int(transaction_header.get("block_number", 0))
                 block_found_datetime = int(transaction_header.get("timestamp_seconds", 0))
@@ -461,8 +472,6 @@ class QRLNetworkSpider(scrapy.Spider):
                 master_addr = {}
 
             item_transaction["master_addr_type"] = master_addr.get("type", "Unknown")
-
-            # Ensure master_addr["data"] is a list before processing
             master_addr_data = master_addr.get("data", [])
             if isinstance(master_addr_data, list):
                 item_transaction["master_addr_data"] = list_integer_to_hex(master_addr_data)
@@ -481,13 +490,10 @@ class QRLNetworkSpider(scrapy.Spider):
                 item_transaction["transaction_hash"] = None
 
             # Validate public_key
-            # Validate public_key
             public_key = transaction_tx.get("public_key", {})
-
-            # 🚨 Handle case where public_key is a string instead of a dictionary
             if isinstance(public_key, str):
-                item_transaction["public_key_data"] = public_key  # Store it as-is
-                item_transaction["public_key_type"] = "String"  # Mark it as a string
+                item_transaction["public_key_data"] = public_key
+                item_transaction["public_key_type"] = "String"
             elif isinstance(public_key, dict):
                 item_transaction["public_key_type"] = public_key.get("type", "Unknown")
                 if isinstance(public_key.get("data"), list):
@@ -501,22 +507,21 @@ class QRLNetworkSpider(scrapy.Spider):
 
             # Validate signature
             signature = transaction_tx.get("signature", {})
-
-            # 🚨 Handle case where signature is a string instead of a dictionary
             if isinstance(signature, str):
-                item_transaction["signature_type"] = "String"  # Mark it as a string
-                item_transaction["signature_data"] = signature  # Store it as-is
+                item_transaction["signature_type"] = "String"
+                item_transaction["signature_data"] = signature
             elif isinstance(signature, dict):
                 item_transaction["signature_type"] = signature.get("type", "Unknown")
             else:
                 self.logger.error(f"Unexpected format for signature: {type(signature)} - {signature}")
                 item_transaction["signature_type"] = None
 
-            # **Handle Different Transaction Types**
+            # ---------------------------
+            # Handle Different Transaction Types
+            # ---------------------------
             if item_transaction["transaction_type"] == "transfer":
                 transaction_tx_transfer = transaction_tx.get("transfer", {})
                 amounts_list = transaction_tx_transfer.get("amounts", [])
-
                 transfer_list = []
                 transfer_type_list = []
 
@@ -527,80 +532,105 @@ class QRLNetworkSpider(scrapy.Spider):
 
                 transfer_address_amount_combined = list(zip(transfer_list, amounts_list, transfer_type_list))
 
+                # For each recipient, create a new transaction item and yield wallet requests immediately.
                 for address_with_amount in transfer_address_amount_combined:
-                    transaction_sending_wallet_address = transaction.get("addr_from", {}).get("data", [])
-                    
-                    item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(transaction_sending_wallet_address)
+                    local_item = item_transaction.copy()
+                    sending_data = transaction.get("addr_from", {}).get("data", [])
+                    local_item["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(sending_data)
+                    local_item["transaction_receiving_wallet_address"] = "Q" + address_with_amount[0]
+                    local_item["transaction_amount_send"] = address_with_amount[1]
+                    local_item["transaction_addrs_to_type"] = address_with_amount[2]
 
-                    item_transaction["transaction_receiving_wallet_address"] = "Q" + address_with_amount[0]
-                    item_transaction["transaction_amount_send"] = address_with_amount[1]
-                    item_transaction["transaction_addrs_to_type"] = address_with_amount[2]
+                    yield QRLNetworkTransactionItem(local_item)
 
-                    yield QRLNetworkTransactionItem(item_transaction)
+                    # Schedule wallet requests for both sending and receiving addresses,
+                    # but skip the null wallet address.
+                    for wallet in [local_item["transaction_receiving_wallet_address"],
+                                local_item["transaction_sending_wallet_address"]]:
+                        if wallet and wallet not in self.requested_wallets and wallet != "Q0000000000000000000000000000000000000000000000000000000000000000":
+                            self.requested_wallets.add(wallet)
+                            self.logger.info(f"Fetching wallet address details: {wallet}")
+                            yield scrapy.Request(
+                                url=f"{scrap_url}/api/a/{wallet}",
+                                callback=self.parse_address, 
+                                errback=self.errback_conn,
+                                meta={"item_transaction": local_item},
+                            )
 
             elif item_transaction["transaction_type"] == "coinbase":
                 transaction_tx_coinbase = transaction_tx.get("coinbase", {})
                 coinbase_transfer = transaction_tx_coinbase.get("addr_to", {})
 
-                transaction_sending_wallet_address = transaction.get("addr_from", {}).get("data", [])
-                item_transaction["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(transaction_sending_wallet_address)
+                local_item = item_transaction.copy()
+                sending_data = transaction.get("addr_from", {}).get("data", [])
+                local_item["transaction_sending_wallet_address"] = "Q" + list_integer_to_hex(sending_data)
+                local_item["transaction_receiving_wallet_address"] = "Q" + list_integer_to_hex(coinbase_transfer.get("data", []))
+                local_item["transaction_amount_send"] = transaction_tx_coinbase.get("amount", "0")
+                local_item["transaction_addrs_to_type"] = coinbase_transfer.get("type", "Unknown")
 
-                item_transaction["transaction_receiving_wallet_address"] = "Q" + list_integer_to_hex(coinbase_transfer.get("data", []))
-                item_transaction["transaction_amount_send"] = transaction_tx_coinbase.get("amount", "0")
-                item_transaction["transaction_addrs_to_type"] = coinbase_transfer.get("type", "Unknown")
+                yield QRLNetworkTransactionItem(local_item)
 
-                yield QRLNetworkTransactionItem(item_transaction)
+                for wallet in [local_item["transaction_receiving_wallet_address"],
+                            local_item["transaction_sending_wallet_address"]]:
+                    if wallet and wallet not in self.requested_wallets and wallet != "Q0000000000000000000000000000000000000000000000000000000000000000":
+                        self.requested_wallets.add(wallet)
+                        self.logger.info(f"Fetching wallet address details: {wallet}")
+                        yield scrapy.Request(
+                            url=f"{scrap_url}/api/a/{wallet}",
+                            callback=self.parse_address,
+                            errback=self.errback_conn,
+                            meta={"item_transaction": local_item},
+                        )
 
             elif item_transaction["transaction_type"] == "slave":
                 transaction_tx_slave = transaction_tx.get("slave", {})
-                # Get the master (sending) address from "addr_from"
                 master_data = transaction.get("addr_from", {}).get("data", [])
                 if isinstance(master_data, list) and len(master_data) == 32:
                     master_address = "Q" + list_integer_to_hex(master_data)
                 else:
-                    master_address = ""  # Use empty string if not valid
-
-                # For each slave public key, set the receiving address.
+                    master_address = ""
                 for slave_pk in transaction_tx_slave.get("slave_pks", []):
-                    # Check the type of slave_pk and extract slave_data accordingly
+                    local_item = item_transaction.copy()
                     if isinstance(slave_pk, dict):
                         slave_data = slave_pk.get("data", [])
                     elif isinstance(slave_pk, list):
                         slave_data = slave_pk
                     elif isinstance(slave_pk, str):
-                        # If it's already a string, assume it's a valid address
                         slave_address = slave_pk
-                        item_transaction["transaction_sending_wallet_address"] = master_address
-                        item_transaction["transaction_receiving_wallet_address"] = slave_address
-                        item_transaction["transaction_amount_send"] = 0
-                        item_transaction["transaction_addrs_to_type"] = ""
-                        yield QRLNetworkTransactionItem(item_transaction.copy())
-                        continue  # Proceed to next slave_pk
+                        local_item["transaction_sending_wallet_address"] = master_address
+                        local_item["transaction_receiving_wallet_address"] = slave_address
+                        local_item["transaction_amount_send"] = 0
+                        local_item["transaction_addrs_to_type"] = ""
+                        yield QRLNetworkTransactionItem(local_item.copy())
+                        continue
                     else:
                         slave_data = []
-                    
                     if isinstance(slave_data, list) and len(slave_data) == 32:
                         slave_address = "Q" + list_integer_to_hex(slave_data)
                     else:
-                        slave_address = ""  # Fallback to empty string
-                    
-                    item_transaction["transaction_sending_wallet_address"] = master_address
-                    item_transaction["transaction_receiving_wallet_address"] = slave_address
-                    item_transaction["transaction_amount_send"] = 0
-                    item_transaction["transaction_addrs_to_type"] = ""
-                    yield QRLNetworkTransactionItem(item_transaction.copy())
+                        slave_address = ""
+                    local_item["transaction_sending_wallet_address"] = master_address
+                    local_item["transaction_receiving_wallet_address"] = slave_address
+                    local_item["transaction_amount_send"] = 0
+                    local_item["transaction_addrs_to_type"] = ""
+                    yield QRLNetworkTransactionItem(local_item.copy())
 
-
+                    for wallet in [master_address, slave_address]:
+                        if wallet and wallet not in self.requested_wallets and wallet != "Q0000000000000000000000000000000000000000000000000000000000000000":
+                            self.requested_wallets.add(wallet)
+                            self.logger.info(f"Fetching wallet address details: {wallet}")
+                            yield scrapy.Request(
+                                url=f"{scrap_url}/api/a/{wallet}",
+                                callback=self.parse_address,
+                                errback=self.errback_conn,
+                                meta={"item_transaction": local_item},
+                            )
 
             elif item_transaction["transaction_type"] == "token":
                 token_data = transaction_tx.get("token", {})
-                # Use "initialBalances" if available; fallback to "initial_balances"
                 initial_balances = token_data.get("initialBalances") or token_data.get("initial_balances", [])
-                
-                # Iterate through all recipients
                 receiving_addresses = []
                 for balance_entry in initial_balances:
-                    # Ensure we have a dictionary for each balance entry
                     if isinstance(balance_entry, dict):
                         address_field = balance_entry.get("address")
                         if isinstance(address_field, dict):
@@ -609,68 +639,55 @@ class QRLNetworkSpider(scrapy.Spider):
                                 receiving_addresses.append("Q" + list_integer_to_hex(data))
                         elif isinstance(address_field, str):
                             receiving_addresses.append(address_field)
-                
-                item_transaction["transaction_receiving_wallet_address"] = (
+                local_item = item_transaction.copy()
+                local_item["transaction_receiving_wallet_address"] = (
                     ", ".join(receiving_addresses) if receiving_addresses else "UNKNOWN"
                 )
-                item_transaction["initial_balance_address"] = (
-                    receiving_addresses[0] if receiving_addresses else "UNKNOWN"
-                )
-                item_transaction["initial_balance"] = (
-                    initial_balances[0].get("amount", "0") if initial_balances and isinstance(initial_balances[0], dict) else "0"
-                )
-                
-                # For symbol, check if it's a dict (with "data") or a simple string.
+                local_item["initial_balance_address"] = (receiving_addresses[0] if receiving_addresses else "UNKNOWN")
+                local_item["initial_balance"] = (initial_balances[0].get("amount", "0")
+                                                if initial_balances and isinstance(initial_balances[0], dict)
+                                                else "0")
                 token_symbol = token_data.get("symbol")
                 if isinstance(token_symbol, dict):
                     token_symbol = list_integer_to_string(token_symbol.get("data", []))
-                item_transaction["token_symbol"] = token_symbol or "UNKNOWN"
-                
-                # Same for token name.
+                local_item["token_symbol"] = token_symbol or "UNKNOWN"
                 token_name = token_data.get("name")
                 if isinstance(token_name, dict):
                     token_name = list_integer_to_string(token_name.get("data", []))
-                item_transaction["token_name"] = token_name or "UNKNOWN"
-                
-                # Process token owner (expected to be a dict with "data")
+                local_item["token_name"] = token_name or "UNKNOWN"
                 token_owner = token_data.get("owner", {})
                 if isinstance(token_owner, dict):
                     owner_data = token_owner.get("data", [])
-                    item_transaction["token_owner"] = "Q" + list_integer_to_hex(owner_data) if owner_data else "UNKNOWN"
+                    local_item["token_owner"] = "Q" + list_integer_to_hex(owner_data) if owner_data else "UNKNOWN"
                 elif isinstance(token_owner, str):
-                    item_transaction["token_owner"] = token_owner
+                    local_item["token_owner"] = token_owner
                 else:
-                    item_transaction["token_owner"] = "UNKNOWN"
-                
-                # Convert decimals to int if possible
-                token_decimals = token_data.get("decimals")
+                    local_item["token_owner"] = "UNKNOWN"
                 try:
-                    token_decimals = int(token_decimals)
+                    local_item["token_decimals"] = int(token_data.get("decimals", 0))
                 except (TypeError, ValueError):
-                    token_decimals = 0
-                item_transaction["token_decimals"] = token_decimals
+                    local_item["token_decimals"] = 0
 
-                yield QRLNetworkTransactionItem(item_transaction)
+                yield QRLNetworkTransactionItem(local_item)
 
+                for wallet in [local_item.get("transaction_receiving_wallet_address"),
+                            local_item.get("transaction_sending_wallet_address")]:
+                    if wallet and wallet not in self.requested_wallets and wallet != "Q0000000000000000000000000000000000000000000000000000000000000000":
+                        self.requested_wallets.add(wallet)
+                        self.logger.info(f"Fetching wallet address details: {wallet}")
+                        yield scrapy.Request(
+                            url=f"{scrap_url}/api/a/{wallet}",
+                            callback=self.parse_address,
+                            errback=self.errback_conn,
+                            meta={"item_transaction": local_item},
+                        )
 
-            # Ensure we fetch details for both sending & receiving wallet addresses
-            for scrape_wallet_url in [
-                item_transaction.get("transaction_receiving_wallet_address"),
-                item_transaction.get("transaction_sending_wallet_address"),
-            ]:
-                if scrape_wallet_url and scrape_wallet_url not in self.requested_wallets:
-                    self.requested_wallets.add(scrape_wallet_url)
-                    self.logger.info(f"Fetching wallet address details: {scrape_wallet_url}")
-                    yield scrapy.Request(
-                        url=f"{scrap_url}/api/a/{scrape_wallet_url}",
-                        callback=self.parse_address, 
-                        errback=self.errback_conn,
-                        meta={"item_transaction": item_transaction},
-                    )
-
+            # Note: We have scheduled wallet requests immediately in each branch,
+            # so the final loop (which fetched both addresses) is now removed.
         except Exception as error:
             self.logger.error(f"Error in parse_transaction: {error}")
             yield self.handle_error(response, error)
+
 
     def parse_address(self, response):
         try:    
@@ -697,6 +714,12 @@ class QRLNetworkSpider(scrapy.Spider):
             # If the API indicates the wallet is not found, still yield an item with what we have.
             if not json_response.get("found", True):
                 self.logger.error(f"API reports wallet {wallet_address} as invalid: {json_response.get('message')}")
+                yield item_address
+                return
+
+                        # Suppress error logging for the null wallet address.
+            if wallet_address == "Q0000000000000000000000000000000000000000000000000000000000000000":
+                self.logger.info(f"Skipping invalid wallet (null): {wallet_address}")
                 yield item_address
                 return
 
