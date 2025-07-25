@@ -168,8 +168,9 @@ class walletDistribution(APIView):
         
         df_perct = df_total
 
-        labels = [ i for i in range(1, 1001, 1)]
-        df_perct['perct_group'] = pd.qcut(df_perct['address_balance'].rank(method='first'), q=1000, labels=labels )
+        labels = [i for i in range(1, 101)]
+        df_perct['perct_group'] = pd.qcut(df_perct['address_balance'].rank(method='first'), q=100, labels=labels)
+
         df_perct = df_perct.groupby('perct_group', as_index=False).agg({'address_balance': ['sum', 'count', 'mean', 'min',]})
         df_perct.columns = ["_".join(x) for x in df_perct.columns.ravel()]
     
@@ -177,8 +178,8 @@ class walletDistribution(APIView):
         df_perct['volume_owned'] = df_perct['address_balance_sum'] 
         
         df_grouped = df_total    
-        labels = [ i for i in range(1, 100, 1)]
-        df_grouped['address_balance_group'] = pd.qcut(df_total['address_balance'].rank(method='first'), q=99, labels=labels)
+        labels = [ i for i in range(1, 101, 1)]
+        df_grouped['address_balance_group'] = pd.qcut(df_total['address_balance'].rank(method='first'), q=100, labels=labels)
         df_grouped = df_total.groupby('address_balance_group', as_index=False).agg({'address_balance': ['sum', 'count', 'mean', 'min']})
         df_grouped.columns = ["_".join(x) for x in df_grouped.columns.ravel()]
     
@@ -193,6 +194,28 @@ class walletDistribution(APIView):
         except Exception as e:
             print(f"Error fetching emission from database: {e}")
             emission_clean = 0  # Fallback if an error occurs
+        # Sorteer op saldo aflopend
+        df_total_sorted = df_total.sort_values('address_balance', ascending=False).reset_index(drop=True)
+
+        # Maak cumulatieve som (top N wallets)
+        df_total_sorted['cumulative_balance'] = df_total_sorted['address_balance'].cumsum()
+        df_total_sorted['cumulative_percentage'] = 100 * df_total_sorted['cumulative_balance'] / emission_clean
+
+        # Stappen exact zoals jij opgeeft:
+        slider_steps = [10, 100, 200, 300, 400, 500, 1000, 2000, 3000, 4000, 5000, 10000]
+
+        max_wallets = len(df_total_sorted)
+        # Alleen stappen toevoegen die <= aantal wallets zijn
+        slider_steps = [n for n in slider_steps if n <= max_wallets]
+
+        slider_data = [
+            {
+                "wallets": int(n),
+                "cumulative_balance": int(df_total_sorted.iloc[n-1]['cumulative_balance']),
+                "cumulative_percentage": round(float(df_total_sorted.iloc[n-1]['cumulative_percentage']), 2)
+            }
+            for n in slider_steps
+        ]
 
         # Ensure all wallets have a category, default to 'Private'
         df_total['wallet_type'] = df_total['wallet_type'].fillna('Private')
@@ -232,12 +255,12 @@ class walletDistribution(APIView):
             })
 
         # Add 'Unknown' category
-        wallet_categories_stats.append({
-            "name": "Unknown",
-            "count": "N/A",  # No specific count since it's inferred
-            "total_value": unknown_balance,
-            "percentage": round((unknown_balance / emission_clean) * 100, 2) if emission_clean > 0 else 0
-        })
+        # wallet_categories_stats.append({
+        #     "name": "Unknown",
+        #     "count": "N/A",  # No specific count since it's inferred
+        #     "total_value": unknown_balance,
+        #     "percentage": round((unknown_balance / emission_clean) * 100, 2) if emission_clean > 0 else 0
+        # })
 
         return Response({
             'distribution_percentage': {
@@ -250,6 +273,7 @@ class walletDistribution(APIView):
             'exchange_addresses': exchange_addresses,
             'mining_addresses': mining_addresses, 
             'emission': emission_clean,
+            'wallets_cumulative_distribution': slider_data,
         })
 
         
