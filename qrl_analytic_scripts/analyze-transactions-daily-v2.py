@@ -165,6 +165,43 @@ def save_transaction_analysis_to_database_upsert(df_grouped):
         connection.rollback()
         raise
 
+def analyze_qrl_transactions():
+    """Main function to analyze QRL transactions for daily aggregation."""
+    try:
+        print("🚀 Starting daily QRL transaction analysis...")
+        
+        # Get the latest date from aggregated data
+        latest_date = fetch_latest_transaction_analytics_date()
+        
+        if latest_date:
+            # Start from the day after the latest date
+            start_date = latest_date + timedelta(days=1)
+            print(f"📅 Fetching transactions from {start_date} onwards...")
+        else:
+            # No existing data, start from genesis
+            start_date = GENESIS_DATE
+            print(f"📅 No existing data found. Starting from genesis date: {start_date}")
+        
+        # Fetch new transaction data
+        data = fetch_transaction_data(start_date=start_date)
+        
+        if data.empty:
+            print("✅ No new transactions to process.")
+            return
+        
+        print(f"📊 Processing {len(data)} transactions...")
+        
+        # Analyze and aggregate the data
+        result = analyze_transactions(data)
+        
+        # Save to database
+        save_transaction_analysis_to_database_upsert(result)
+        
+        print("✅ Daily transaction analysis complete.")
+        
+    except Exception as e:
+        print(f"❌ Error in daily transaction analysis: {e}")
+        raise
 
 def recalculate_all_transactions():
     try:
@@ -204,6 +241,7 @@ if __name__ == "__main__":
             else:
                 print("⚠️ Unknown command.")
         else:
+            # This is the fix - call the correct function for daily analysis
             analyze_qrl_transactions()
     except Exception as e:
         print(f"❌ Critical error in main execution: {e}")
