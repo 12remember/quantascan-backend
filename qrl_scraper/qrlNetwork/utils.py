@@ -85,7 +85,7 @@ def get_db_connection():
     """Returns a pooled database connection and cursor."""
     try:
         connection = get_connection()
-        connection.autocommit = True
+        # Don't set autocommit - let the pipeline handle commits
         cursor = connection.cursor()
         return connection, cursor
     except psycopg2.Error as e:

@@ -479,6 +479,18 @@ class QRLNetworkSpider(scrapy.Spider):
                 self.logger.error(f"Invalid data format for master_addr['data']: {type(master_addr_data)}")
                 item_transaction["master_addr_data"] = None
 
+            # Extract master_addr_fee from the transaction
+            # For coinbase transactions, fee is typically 0
+            # For other transactions, fee might be in the transaction data
+            if item_transaction["transaction_type"] == "coinbase":
+                item_transaction["master_addr_fee"] = 0
+            else:
+                # Try to get fee from transaction data, default to 0 if not found
+                item_transaction["master_addr_fee"] = transaction_tx.get("fee", 0)
+            
+            # Log the master_addr_fee for debugging
+            self.logger.info(f"✅ Extracted master_addr_fee: {item_transaction['master_addr_fee']} for transaction type: {item_transaction['transaction_type']}")
+
             # Validate transaction hash
             transaction_hash = transaction_tx.get("transaction_hash", {})
             if isinstance(transaction_hash, str):
@@ -542,6 +554,7 @@ class QRLNetworkSpider(scrapy.Spider):
                     local_item["transaction_addrs_to_type"] = address_with_amount[2]
 
                     yield QRLNetworkTransactionItem(local_item)
+                    self.logger.info(f"🔄 Yielding transaction item: {local_item['transaction_hash'][:20]}... | Type: {local_item['transaction_type']} | Amount: {local_item['transaction_amount_send']}")
 
                     # Schedule wallet requests for both sending and receiving addresses,
                     # but skip the null wallet address.

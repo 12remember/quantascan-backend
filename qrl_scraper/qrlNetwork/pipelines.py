@@ -167,7 +167,7 @@ class QrlnetworkPipeline_transaction:
         try:
             datetimeNow = datetime.now(timezone.utc)
             with db_cursor() as (conn, cur):
-                # Controleer op duplicate transacties
+                # Check for duplicate transactions (same hash and recipient combination)
                 cur.execute(
                     'SELECT "transaction_hash" FROM public."qrl_blockchain_transactions" '
                     'WHERE "transaction_hash" = %s AND "transaction_receiving_wallet_address" = %s',
@@ -212,8 +212,9 @@ class QrlnetworkPipeline_transaction:
                         )
                     )
                     conn.commit()
-                    logging.info('Got new transaction, hash: %s ' % item['transaction_hash'])
+                    logging.info('✅ SAVED transaction to database: %s | Type: %s | Amount: %s' % (item['transaction_hash'], item.get('transaction_type'), item.get('transaction_amount_send')))
                 else:
+                    logging.info('⚠️ SKIPPED duplicate transaction: %s | Type: %s' % (item['transaction_hash'], item.get('transaction_type')))
                     raise DropItem(f"Already got transaction: {item['transaction_hash']}")
         except DropItem as duplicate:
             pass

@@ -19,10 +19,23 @@ def fetch_existing_transaction_dates():
 def find_missing_transaction_days():
     """Find missing days between genesis block date and today in the aggregated transaction table."""
     try:
-        existing_dates = fetch_existing_transaction_dates()
-        all_dates = {GENESIS_DATE + timedelta(days=i) for i in range((datetime.utcnow() - GENESIS_DATE).days + 1)}
-
-        missing_dates = sorted(all_dates - existing_dates)  # Find missing dates
+        # Get existing dates that have coinbase transactions in aggregated data
+        # Convert timestamp to date for proper comparison
+        cur.execute('''
+            SELECT DISTINCT DATE("date") as coinbase_date
+            FROM public."qrl_aggregated_transaction_data" 
+            WHERE "transaction_type" = 'coinbase'
+            ORDER BY coinbase_date ASC
+        ''')
+        result = cur.fetchall()
+        existing_coinbase_dates = {row[0] for row in result}
+        
+        # Get all dates from genesis to today that should have coinbase transactions
+        today = datetime.utcnow().date()
+        all_dates = {GENESIS_DATE.date() + timedelta(days=i) for i in range((today - GENESIS_DATE.date()).days + 1)}
+        
+        # Find missing dates (dates that should have coinbase transactions but don't)
+        missing_dates = sorted(all_dates - existing_coinbase_dates)
         return missing_dates
     except Exception as e:
         print(f"Error finding missing transaction days: {e}")
@@ -39,11 +52,15 @@ def analyze_missing_transaction_days():
         print(f"⚠️ Missing {len(missing_dates)} transaction days. Recalculating...")
         for missing_date in missing_dates:
             print(f"📅 Processing missing transactions for date: {missing_date}")
-            data = fetch_transaction_data(start_date=missing_date)
+            
+            # Fetch transaction data for the specific missing date
+            start_date = datetime.combine(missing_date, datetime.min.time())
+            end_date = datetime.combine(missing_date, datetime.max.time())
+            data = fetch_transaction_data_for_date_range(start_date, end_date)
 
             if not data.empty:
                 result = analyze_transactions(data)
-                save_transaction_analysis_to_database_upsert(result)
+                save_transaction_analysis_to_database_upsert_improved(result, missing_date)
             else:
                 print(f"⚠️ No transactions found for {missing_date}, skipping.")
 
@@ -99,11 +116,50 @@ def fetch_transaction_data(start_date=None):
         print(f"Error fetching transaction data: {e}")
         raise
 
+def fetch_transaction_data_for_date_range(start_date, end_date):
+    """Fetch transaction data from the blockchain within a specific date range."""
+    try:
+        query = '''
+            SELECT DISTINCT "transaction_hash",
+                   "transaction_block_number",
+                   public.qrl_blockchain_transactions.block_found_datetime,
+                   "transaction_type", 
+                   "transaction_amount_send", 
+                   "transaction_result",
+                   qrl_blockchain_transactions.master_addr_fee
+            FROM public."qrl_blockchain_transactions"
+            INNER JOIN public."qrl_blockchain_blocks" 
+            ON "transaction_block_number" = "block_number"
+            WHERE public.qrl_blockchain_transactions.block_found_datetime >= %s 
+            AND public.qrl_blockchain_transactions.block_found_datetime <= %s
+            ORDER BY "transaction_block_number" ASC
+        '''
+        cur.execute(query, (start_date, end_date))
+        
+        return pd.DataFrame(
+            cur.fetchall(),
+            columns=[
+                "transaction_hash",  
+                "transaction_block_number", 
+                "block_found_datetime", 
+                "transaction_type", 
+                "transaction_amount_send", 
+                "transaction_result", 
+                "master_addr_fee"
+            ]
+        )
+    except Exception as e:
+        print(f"Error fetching transaction data for date range: {e}")
+        raise
+
 def analyze_transactions(df):
     """Analyze and aggregate transaction data."""
     try:
         df['date'] = pd.to_datetime(df['block_found_datetime']).dt.floor('d')  # Use 'date' to match the table
-        df['master_addr_fee_no_0'] = df.apply(lambda row: np.nan if row['transaction_type'] == 'coinbase' else row['master_addr_fee'], axis=1)
+        
+        # Fix transaction fee calculation - don't exclude coinbase transactions from fee calculations
+        # Coinbase transactions can have fees too, just set to 0 if not present
+        df['master_addr_fee_no_0'] = df['master_addr_fee'].fillna(0)
 
         df_grouped = df.groupby(['date', 'transaction_type']).agg({
             'transaction_block_number': 'count',
@@ -116,7 +172,7 @@ def analyze_transactions(df):
         # Add metadata
         df_grouped['analyze_script_date'] = pd.Timestamp.now()
         df_grouped['analyze_script_name'] = 'analyze-transactions-daily'
-        df_grouped['analyze_script_version'] = '0.02'
+        df_grouped['analyze_script_version'] = '0.03'  # Updated version
 
         # Rename columns for consistency with the database schema
         df_grouped = df_grouped.rename(columns={
@@ -165,36 +221,133 @@ def save_transaction_analysis_to_database_upsert(df_grouped):
         connection.rollback()
         raise
 
-def analyze_qrl_transactions():
-    """Main function to analyze QRL transactions for daily aggregation."""
+def save_transaction_analysis_to_database_upsert_improved(df_grouped, current_date):
+    """Insert or update aggregated transaction data in the database with improved logic for current date."""
     try:
-        print("🚀 Starting daily QRL transaction analysis...")
+        with connection.cursor() as cursor:
+            for _, row in df_grouped.iterrows():
+                # Check if current date and transaction type already exist
+                cursor.execute('''
+                    SELECT COUNT(*) FROM public.qrl_aggregated_transaction_data 
+                    WHERE "date" = %s AND "transaction_type" = %s
+                ''', (row['date'], row['transaction_type']))
+                
+                exists = cursor.fetchone()[0] > 0
+                
+                if exists:
+                    # Update existing record for current date
+                    update_cols = ', '.join([
+                        f'"{col}" = %s'
+                        for col in df_grouped.columns if col not in ['date', 'transaction_type']
+                    ])
+                    
+                    update_values = [row[col] for col in df_grouped.columns if col not in ['date', 'transaction_type']]
+                    update_values.extend([row['date'], row['transaction_type']])  # Add WHERE clause values
+                    
+                    query = f"""
+                        UPDATE public.qrl_aggregated_transaction_data 
+                        SET {update_cols}
+                        WHERE "date" = %s AND "transaction_type" = %s
+                    """
+                    
+                    cursor.execute(query, update_values)
+                    if current_date:
+                        print(f"🔄 Updated existing record for {row['date']} - {row['transaction_type']}")
+                else:
+                    # Insert new record
+                    cols = ', '.join(df_grouped.columns)
+                    placeholders = ', '.join(['%s'] * len(df_grouped.columns))
+                    values = tuple(row[col] for col in df_grouped.columns)
+                    
+                    query = f"""
+                        INSERT INTO public.qrl_aggregated_transaction_data ({cols})
+                        VALUES ({placeholders})
+                    """
+                    
+                    cursor.execute(query, values)
+                    if current_date:
+                        print(f"➕ Inserted new record for {row['date']} - {row['transaction_type']}")
+            
+            connection.commit()
+            if current_date:
+                print(f"✅ Successfully processed {len(df_grouped)} rows with improved upsert logic.")
+            else:
+                print(f"✅ Successfully processed {len(df_grouped)} rows for full recalculation.")
+            
+    except Exception as e:
+        print(f"❌ Error saving transaction analysis to database: {e}")
+        connection.rollback()
+        raise
+
+def recalculate_between_dates(start_date, end_date):
+    """Recalculate transaction analytics between two specific dates."""
+    try:
+        print(f"🔄 Recalculating transactions between {start_date} and {end_date}...")
         
-        # Get the latest date from aggregated data
-        latest_date = fetch_latest_transaction_analytics_date()
+        # Convert string dates to datetime if needed
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
         
-        if latest_date:
-            # Start from the day after the latest date
-            start_date = latest_date + timedelta(days=1)
-            print(f"📅 Fetching transactions from {start_date} onwards...")
-        else:
-            # No existing data, start from genesis
-            start_date = GENESIS_DATE
-            print(f"📅 No existing data found. Starting from genesis date: {start_date}")
+        # Delete existing aggregated data for this date range
+        cur.execute('''
+            DELETE FROM public."qrl_aggregated_transaction_data" 
+            WHERE DATE("date") BETWEEN %s AND %s
+        ''', (start_date, end_date))
+        connection.commit()
+        print(f"✅ Cleared existing aggregated data for date range")
         
-        # Fetch new transaction data
-        data = fetch_transaction_data(start_date=start_date)
+        # Fetch transaction data for the date range
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        
+        data = fetch_transaction_data_for_date_range(start_datetime, end_datetime)
         
         if data.empty:
-            print("✅ No new transactions to process.")
+            print("⚠️ No transaction data found for the specified date range.")
             return
         
-        print(f"📊 Processing {len(data)} transactions...")
+        print(f"📊 Processing {len(data)} transactions for date range...")
         
         # Analyze and aggregate the data
         result = analyze_transactions(data)
         
         # Save to database
+        save_transaction_analysis_to_database_upsert_improved(result, None)
+        
+        print(f"✅ Successfully recalculated transactions between {start_date} and {end_date}")
+        
+    except Exception as e:
+        print(f"❌ Error recalculating between dates: {e}")
+        raise
+
+def analyze_qrl_transactions():
+    """Main function to analyze QRL transactions for daily aggregation."""
+    try:
+        print("🚀 Starting daily QRL transaction analysis...")
+        
+        # Get the current date (today)
+        current_date = datetime.utcnow().date()
+        print(f"📅 Analyzing transactions for current date: {current_date}")
+        
+        # Fetch transaction data for the current day
+        start_date = datetime.combine(current_date, datetime.min.time())
+        end_date = datetime.combine(current_date, datetime.max.time())
+        
+        # Fetch transaction data for the current day
+        data = fetch_transaction_data_for_date_range(start_date, end_date)
+        
+        if data.empty:
+            print("✅ No transactions found for current day.")
+            return
+        
+        print(f"📊 Processing {len(data)} transactions for current day...")
+        
+        # Analyze and aggregate the data
+        result = analyze_transactions(data)
+        
+        # Save to database with improved upsert logic
         save_transaction_analysis_to_database_upsert(result)
         
         print("✅ Daily transaction analysis complete.")
@@ -219,7 +372,7 @@ def recalculate_all_transactions():
 
         # Analyze and aggregate the entire dataset
         result = analyze_transactions(data)
-        save_transaction_analysis_to_database_upsert(result)
+        save_transaction_analysis_to_database_upsert_improved(result, None)  # None for recalculate_all
         print("✅ Successfully recalculated all transaction days.")
     except Exception as e:
         print(f"Error recalculating all transactions: {e}")
@@ -228,9 +381,10 @@ def recalculate_all_transactions():
 # Script entry point
 if __name__ == "__main__":
     print("Usage:")
-    print("  python analyze-transactions-daily-v2.py             # Run daily transaction analysis")
-    print("  python analyze-transactions-daily-v2.py recalculate_all  # Full transaction reanalysis")
-    print("  python analyze-transactions-daily-v2.py check_missing  # Check and fill missing transaction days")
+    print("  python analyze-transactions-daily-v2.py                                    # Run daily transaction analysis")
+    print("  python analyze-transactions-daily-v2.py recalculate_all                    # Full transaction reanalysis")
+    print("  python analyze-transactions-daily-v2.py check_missing                      # Check and fill missing transaction days")
+    print("  python analyze-transactions-daily-v2.py recalculate_between 2025-07-26 2025-07-30  # Recalculate between specific dates")
 
     try:
         if len(sys.argv) > 1:
@@ -238,6 +392,14 @@ if __name__ == "__main__":
                 recalculate_all_transactions()
             elif sys.argv[1] == 'check_missing':
                 analyze_missing_transaction_days()
+            elif sys.argv[1] == 'recalculate_between':
+                if len(sys.argv) >= 4:
+                    start_date = sys.argv[2]
+                    end_date = sys.argv[3]
+                    recalculate_between_dates(start_date, end_date)
+                else:
+                    print("⚠️ Usage: python analyze-transactions-daily-v2.py recalculate_between START_DATE END_DATE")
+                    print("   Example: python analyze-transactions-daily-v2.py recalculate_between 2025-07-26 2025-07-30")
             else:
                 print("⚠️ Unknown command.")
         else:
