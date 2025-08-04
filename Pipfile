@@ -24,5 +24,6 @@ dj-database-url = "*"
 django-debug-toolbar = "*"
 numpy = "*"
 django = "*"
+django-environ = "*"
 
 [dev-packages]
