@@ -431,26 +431,29 @@ class networkTotalCirculatingQuanta(APIView):
         })
 
 
-class networkTransactionFee(APIView):
-    @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
-    def get(self, request, format=None, *args, **kwargs):
-        # Fetch only required fields
-        qs = QrlAggregatedTransactionData.objects.filter(transaction_type='transfer').values(
-            'date', 'transaction_fee_mean', 'transaction_fee_min', 'transaction_fee_max'
-        ).order_by('date')
+    SHOR_PER_QUANTA = 1_000_000_000
 
-        # Process data
-        chart_data_point_list = [
-            {
-                "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),  # Manual epoch conversion
-                "transaction_fee_mean": (row["transaction_fee_mean"] ) if row["transaction_fee_mean"] else 0,
-                "transaction_fee_min": (row["transaction_fee_min"] ) if row["transaction_fee_min"] else 0,
-                "transaction_fee_max": (row["transaction_fee_max"]) if row["transaction_fee_max"] else 0,
-            }
-            for row in qs
-        ]
+    class networkTransactionFee(APIView):
+        @method_decorator(cache_page(60 * 60))  # Cache for 1 hour
+        def get(self, request, format=None, *args, **kwargs):
+            # Fetch only required fields
+            qs = QrlAggregatedTransactionData.objects.filter(transaction_type='transfer').values(
+                'date', 'transaction_fee_mean', 'transaction_fee_min', 'transaction_fee_max'
+            ).order_by('date')
 
-        return Response({"chart_data_point_list": chart_data_point_list})
+            # Process data
+            chart_data_point_list = [
+                {
+                    "date": int((row["date"] - dt.datetime(1970, 1, 1)).total_seconds() * 1000),
+                    "transaction_fee_mean": (row["transaction_fee_mean"] / SHOR_PER_QUANTA) if row["transaction_fee_mean"] else 0,
+                    "transaction_fee_min": (row["transaction_fee_min"] / SHOR_PER_QUANTA) if row["transaction_fee_min"] else 0,
+                    "transaction_fee_max": (row["transaction_fee_max"] / SHOR_PER_QUANTA) if row["transaction_fee_max"] else 0,
+                }
+                for row in qs
+            ]
+
+            return Response({"chart_data_point_list": chart_data_point_list})
+
     
     
 class networkUniqueWalletsUsed(APIView):
