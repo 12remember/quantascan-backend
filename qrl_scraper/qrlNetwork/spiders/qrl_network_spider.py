@@ -486,10 +486,25 @@ class QRLNetworkSpider(scrapy.Spider):
                 item_transaction["master_addr_fee"] = 0
             else:
                 # Try to get fee from transaction data, default to 0 if not found
-                item_transaction["master_addr_fee"] = transaction_tx.get("fee", 0)
+                fee_value = transaction_tx.get("fee", 0)
+                
+                # Convert fee to numeric value if it's a string
+                if isinstance(fee_value, str):
+                    try:
+                        # Convert string fee to float, then to integer (assuming fee is in QRL units)
+                        # Example: "0.0005" -> 0.0005 -> 500 (if fee is in QRL units)
+                        fee_float = float(fee_value)
+                        # Convert to smallest unit (assuming 1 QRL = 1,000,000,000 units)
+                        item_transaction["master_addr_fee"] = int(fee_float * 1000000000)
+                    except (ValueError, TypeError):
+                        self.logger.warning(f"Could not convert fee '{fee_value}' to numeric value, using 0")
+                        item_transaction["master_addr_fee"] = 0
+                else:
+                    # If fee is already numeric, use it directly
+                    item_transaction["master_addr_fee"] = fee_value
             
             # Log the master_addr_fee for debugging
-            self.logger.info(f"✅ Extracted master_addr_fee: {item_transaction['master_addr_fee']} for transaction type: {item_transaction['transaction_type']}")
+            #self.logger.info(f"✅ Extracted master_addr_fee: {item_transaction['master_addr_fee']} for transaction type: {item_transaction['transaction_type']} (original fee: {transaction_tx.get('fee', 'N/A')})")
 
             # Validate transaction hash
             transaction_hash = transaction_tx.get("transaction_hash", {})

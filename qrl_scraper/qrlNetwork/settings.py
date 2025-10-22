@@ -49,12 +49,21 @@ USER_AGENT = 'QuantaScan.io (https://quantascan.io)'
 ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 32
+CONCURRENT_REQUESTS = 8
 
 # Configure a delay for requests for the same website (default: 0)
-#DOWNLOAD_DELAY = 0.0  # 0.07
-CONCURRENT_REQUESTS_PER_DOMAIN = 32
-REACTOR_THREADPOOL_MAXSIZE = 20
+DOWNLOAD_DELAY = 0.5  # Add 0.5 second delay between requests
+CONCURRENT_REQUESTS_PER_DOMAIN = 8
+REACTOR_THREADPOOL_MAXSIZE = 10
+
+# Add random delay to avoid being blocked
+RANDOMIZE_DOWNLOAD_DELAY = True
+
+# Memory management
+MEMUSAGE_ENABLED = True
+MEMUSAGE_LIMIT_MB = 2048  # 2GB memory limit
+MEMUSAGE_WARNING_MB = 1024  # Warning at 1GB
+
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False
 
@@ -77,5 +86,10 @@ DOWNLOADER_MIDDLEWARES = {
     'scrapy.downloadermiddlewares.downloadtimeout.DownloadTimeoutMiddleware': 50,
     'scrapy.downloadermiddlewares.useragent.UserAgentMiddleware': 100,
 }
+
+# Add timeout settings
+DOWNLOAD_TIMEOUT = 30
+RETRY_TIMES = 3
+RETRY_HTTP_CODES = [500, 502, 503, 504, 408, 429]
 
 

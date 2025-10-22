@@ -33,32 +33,50 @@ def handle_spider_error(spider, error, item, item_url="N/A"):
     spider_version = getattr(spider, "version", "Unknown")
     spider_class = getattr(spider, "__class__", "UnknownClass").__name__
 
+    # Log the error to console for immediate visibility
+    spider.logger.error(f"❌ Pipeline error: {error_message}")
+    spider.logger.error(f"   URL: {item_url}")
+    spider.logger.error(f"   Item type: {type(item).__name__ if item else 'None'}")
 
     try:
         with db_cursor() as (conn, cur):
+            # Check if this error is already logged to avoid duplicates
             cur.execute(
-                'INSERT INTO public.qrl_blockchain_missed_items ('
-                '"spider_name", "spider_version", "location_script_file", '
-                '"location_script_function", "trace_back", "error_type", '
-                '"error_name", "item_url", "error_timestamp", "failed_data") '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                (
-                    spider_name,
-                    spider_version,
-                    str(__name__)[:255],
-                    spider_class[:255],
-                    json.dumps(trace_back) if trace_back else None,
-                    error_type[:255],
-                    error_message[:255],
-                    item_url,
-                    datetime.now(timezone.utc),
-                    json.dumps(dict(item))[:1000] if item else None,
-                )
+                'SELECT COUNT(*) FROM public.qrl_blockchain_missed_items WHERE item_url = %s AND error_name = %s',
+                (item_url, error_message[:255])
             )
-            conn.commit()
+            existing_count = cur.fetchone()[0]
+            
+            if existing_count == 0:
+                cur.execute(
+                    'INSERT INTO public.qrl_blockchain_missed_items ('
+                    '"spider_name", "spider_version", "location_script_file", '
+                    '"location_script_function", "trace_back", "error_type", '
+                    '"error_name", "item_url", "error_timestamp", "failed_data") '
+                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                    (
+                        spider_name,
+                        spider_version,
+                        str(__name__)[:255],
+                        spider_class[:255],
+                        json.dumps(trace_back) if trace_back else None,
+                        error_type[:255],
+                        error_message[:255],
+                        item_url,
+                        datetime.now(timezone.utc),
+                        json.dumps(dict(item))[:1000] if item else None,
+                    )
+                )
+                conn.commit()
+                spider.logger.info(f"✅ Error logged to missed_items table: {error_message[:50]}...")
+            else:
+                spider.logger.info(f"⚠️ Error already logged, skipping duplicate: {error_message[:50]}...")
+                
     except Exception as e:
-        # Als er hier een fout optreedt, log deze dan ook.
-        logging.error(f"Critical error logging to missed items table: {e}")
+        # If there's an error logging to the missed items table, log it to console
+        spider.logger.error(f"❌ Critical error logging to missed items table: {e}")
+        spider.logger.error(f"   Original error: {error_message}")
+        spider.logger.error(f"   Item URL: {item_url}")
 
 
 class QrlnetworkPipeline_Emission:
@@ -95,10 +113,25 @@ class QrlnetworkPipeline_block:
         if not isinstance(item, QRLNetworkBlockItem):
             return item
 
-        # Markeer ontbrekende velden zodat je later weet dat er iets ontbreekt
-        missing_fields = [field for field in item.keys() if item.get(field) in [None, ""]]
-        for field in missing_fields:
-            item[field] = "MISSING"
+        # Ensure all required fields exist with safe defaults
+        required_fields = [
+            'block_number', 'block_found', 'block_result', 'block_found_datetime',
+            'block_found_timestamp_seconds', 'block_reward_block', 'block_reward_fee',
+            'block_mining_nonce', 'block_number_of_transactions', 'spider_name',
+            'spider_version', 'block_size', 'block_hash_header_type', 'block_hash_header_data',
+            'block_hash_header_type_prev', 'block_hash_header_data_prev', 'block_merkle_root_type',
+            'block_merkle_root_data'
+        ]
+        
+        for field in required_fields:
+            if field not in item or item.get(field) in [None, ""]:
+                if field in ['block_number', 'block_found_timestamp_seconds', 'block_reward_fee', 
+                           'block_mining_nonce', 'block_number_of_transactions']:
+                    item[field] = 0
+                elif field in ['block_found']:
+                    item[field] = False
+                else:
+                    item[field] = "MISSING"
 
         try:
             datetimeNow = datetime.now(timezone.utc)
@@ -144,18 +177,55 @@ class QrlnetworkPipeline_block:
                         )
                     )
                     conn.commit()
-                    logging.info('Got new block, number: %s ' % item['block_number'])
+                    logging.info('✅ SAVED new block: %s' % item['block_number'])
                 else:
+                    logging.info('⚠️ SKIPPED duplicate block: %s' % item['block_number'])
                     raise DropItem("Already Got Blocknumber: %s" % item['block_number'])
         except DropItem as duplicate:
-            # Duplicate block, geen actie
+            # Duplicate block, no action needed
             pass
         except (Exception, psycopg2.Error) as error:
+            spider.logger.error(f"❌ Error processing block item: {error}")
             handle_spider_error(spider, error, item, item.get("item_url", "N/A"))
         return item
 
 
 class QrlnetworkPipeline_transaction:
+    def _safe_convert_fee_to_microqrl(self, fee_value):
+        """
+        Safely convert fee value to microQRL (smallest unit).
+        Handles various data types: string, int, float, None, etc.
+        """
+        try:
+            # Handle None, empty string, or missing values
+            if fee_value is None or fee_value == "" or fee_value == "UNKNOWN":
+                return 0
+            
+            # Convert to string first to handle any type
+            fee_str = str(fee_value).strip()
+            
+            # Handle empty or whitespace-only strings
+            if not fee_str:
+                return 0
+            
+            # Convert to float (handles both decimal strings and numbers)
+            fee_float = float(fee_str)
+            
+            # Handle negative values (shouldn't happen but be safe)
+            if fee_float < 0:
+                return 0
+            
+            # The fee values are already in microQRL, so no conversion needed
+            # Just convert to int for database storage
+            microqrl = int(fee_float)
+            
+            return microqrl
+            
+        except (ValueError, TypeError, AttributeError) as e:
+            # Log the error for debugging but don't crash the pipeline
+            spider.logger.warning(f"Failed to convert fee value '{fee_value}' to microQRL: {e}")
+            return 0
+    
     def process_item(self, item, spider):
         if not isinstance(item, QRLNetworkTransactionItem):
             return item
@@ -201,7 +271,7 @@ class QrlnetworkPipeline_transaction:
                             item.get("spider_version", "UNKNOWN"),
                             item.get("master_addr_type", "UNKNOWN"),
                             str(item.get("master_addr_data", "UNKNOWN")),
-                            int(item.get("master_addr_fee", 0)),
+                            self._safe_convert_fee_to_microqrl(item.get("master_addr_fee", 0)),
                             item.get("public_key_type", "UNKNOWN"),
                             item.get("public_key_data", "UNKNOWN"),
                             item.get("signature_type", "UNKNOWN"),
@@ -219,6 +289,7 @@ class QrlnetworkPipeline_transaction:
         except DropItem as duplicate:
             pass
         except (Exception, psycopg2.Error) as error:
+            spider.logger.error(f"❌ Error processing transaction item: {error}")
             handle_spider_error(spider, error, item, item.get("item_url", "N/A"))
         return item
 
@@ -228,9 +299,22 @@ class QrlnetworkPipeline_address:
         if not isinstance(item, QRLNetworkAddressItem):
             return item
 
-        missing_fields = [field for field in item.keys() if item.get(field) in [None, ""]]
-        for field in missing_fields:
-            item[field] = "MISSING"
+        # Ensure all required fields exist with safe defaults
+        required_fields = [
+            'address_balance', 'address_nonce', 'address_ots_bitfield_used_page',
+            'address_used_ots_key_count', 'address_transaction_hash_count',
+            'address_tokens_count', 'address_slaves_count', 'address_lattice_pk_count',
+            'address_multi_sig_address_count', 'address_multi_sig_spend_count',
+            'address_inbox_message_count', 'address_foundation_multi_sig_spend_txn_hash',
+            'address_foundation_multi_sig_vote_txn_hash', 'address_unvotes',
+            'address_proposal_vote_stats'
+        ]
+        
+        for field in required_fields:
+            if field not in item or item.get(field) in [None, ""]:
+                item[field] = 0 if field not in ['address_foundation_multi_sig_spend_txn_hash', 
+                                                'address_foundation_multi_sig_vote_txn_hash', 
+                                                'address_unvotes', 'address_proposal_vote_stats'] else ""
 
         try:
             datetimeNow = datetime.now(timezone.utc)
@@ -273,7 +357,7 @@ class QrlnetworkPipeline_address:
                         )
                     )
                     conn.commit()
-                    logging.info('Got New Wallet Address: %s ' % item['wallet_address'])
+                    logging.info('✅ SAVED new wallet address: %s' % item['wallet_address'])
                 else:
                     cur.execute(
                         'UPDATE public."qrl_wallet_address" SET '
@@ -309,10 +393,11 @@ class QrlnetworkPipeline_address:
                         )
                     )
                     conn.commit()
-                    logging.info('Updated Wallet Address: %s ' % item['wallet_address'])
+                    logging.info('🔄 UPDATED wallet address: %s' % item['wallet_address'])
         except DropItem as duplicate:
             pass
         except (Exception, psycopg2.Error) as error:
+            spider.logger.error(f"❌ Error processing address item: {error}")
             handle_spider_error(spider, error, item, item.get("item_url", "N/A"))
         return item
 
