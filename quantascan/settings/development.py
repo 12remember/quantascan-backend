@@ -23,5 +23,13 @@ ALLOWED_HOSTS = [
     '.herokuapp.com',        # <--- allow all subdomains of herokuapp.com
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# Only allow localhost in development when running locally
+# This prevents localhost from accessing the live production API
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8080",
+    # Add your local dev frontend URL here if different
+]
 

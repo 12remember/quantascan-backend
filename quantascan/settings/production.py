@@ -19,7 +19,8 @@ ALLOWED_HOSTS = [
     '.herokuapp.com',    # <--- allow all subdomains of herokuapp.com
 ]
 
-# django-cors-headers
+# django-cors-headers - Production only allows production domains
+# Explicitly override base.py to ensure no localhost access
 CORS_ALLOWED_ORIGINS = [
     "https://www.quantascan.io",
     "https://quantascan.io",
@@ -28,6 +29,8 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.herokuapp\.com$"  # <--- match https://ANYTHING.herokuapp.com
 ]
+# Explicitly deny localhost in production
+CORS_ALLOW_ALL_ORIGINS = False
 
 CSRF_TRUSTED_ORIGINS = [
     'https://www.quantascan.io',
