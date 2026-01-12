@@ -35,6 +35,21 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# CORS Configuration
+# Base settings: Only allow production domains (no localhost)
+# Development.py can override to allow localhost for local development
+# Production.py will use these settings (no localhost allowed)
+CORS_ALLOWED_ORIGINS = [
+    "https://quantascan.io",
+    "https://www.quantascan.io",
+    "https://analytics.quantascan.io",
+]
+
+CORS_ALLOW_CREDENTIALS = False
+CORS_ALLOW_ALL_ORIGINS = False  # Explicitly deny all origins by default
+
+# Allow production.py and development.py to override if needed
+
 ROOT_URLCONF = 'quantascan.urls'
 
 TEMPLATES = [
