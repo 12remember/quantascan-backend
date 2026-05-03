@@ -55,6 +55,7 @@ def _read_stats_cache(cache_key):
     Cache is populated by qrl_analytic_scripts/compute-stats-cache.py (cron).
     Returns (value_dict, updated_at) or ({}, None) if missing.
     """
+    import json
     try:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -65,7 +66,14 @@ def _read_stats_cache(cache_key):
             row = cursor.fetchone()
             if not row:
                 return {}, None
-            return row[0], row[1]
+            value, updated_at = row[0], row[1]
+            # psycopg2 may return JSONB as either dict or raw str depending on
+            # adapter registration. Normalize to dict.
+            if isinstance(value, str):
+                value = json.loads(value)
+            elif not isinstance(value, dict):
+                value = {}
+            return value, updated_at
     except Exception as e:
         print(f"Error reading stats cache for {cache_key}: {e}")
         return {}, None
