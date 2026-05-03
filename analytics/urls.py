@@ -39,7 +39,9 @@ urlpatterns = [
     path('wallet-data-2' , walletData2.as_view(), name='walletData2'),     
     path('donation-data' , donationData.as_view(), name='donationData'),
 
-    path('block-statistics' , BlockStatisticsView.as_view(), name='BlockStatisticsView'),  
+    path('block-statistics' , BlockStatisticsView.as_view(), name='BlockStatisticsView'),
+    path('transaction-statistics' , TransactionStatisticsView.as_view(), name='TransactionStatisticsView'),
+    path('wallet-statistics' , WalletStatisticsView.as_view(), name='WalletStatisticsView'),
 
 
     ]

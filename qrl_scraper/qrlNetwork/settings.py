@@ -49,15 +49,24 @@ USER_AGENT = 'QuantaScan.io (https://quantascan.io)'
 ROBOTSTXT_OBEY = False
 
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 8
+CONCURRENT_REQUESTS = 4
 
 # Configure a delay for requests for the same website (default: 0)
-DOWNLOAD_DELAY = 0.5  # Add 0.5 second delay between requests
-CONCURRENT_REQUESTS_PER_DOMAIN = 8
+DOWNLOAD_DELAY = 1.0
+CONCURRENT_REQUESTS_PER_DOMAIN = 4
 REACTOR_THREADPOOL_MAXSIZE = 10
 
 # Add random delay to avoid being blocked
 RANDOMIZE_DOWNLOAD_DELAY = True
+
+# AutoThrottle: scaalt zelf op/af op basis van server-response. Voorkomt 429s
+# van de Cloudflare-rate-limit op explorer.theqrl.org en gaat sneller wanneer
+# de server het aankan dan vaste DOWNLOAD_DELAY.
+AUTOTHROTTLE_ENABLED = True
+AUTOTHROTTLE_START_DELAY = 1.0
+AUTOTHROTTLE_MAX_DELAY = 30.0
+AUTOTHROTTLE_TARGET_CONCURRENCY = 2.0
+AUTOTHROTTLE_DEBUG = False
 
 # Memory management
 MEMUSAGE_ENABLED = True
@@ -89,7 +98,9 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Add timeout settings
 DOWNLOAD_TIMEOUT = 30
-RETRY_TIMES = 3
-RETRY_HTTP_CODES = [500, 502, 503, 504, 408, 429]
+RETRY_TIMES = 5
+# Cloudflare fronts explorer.theqrl.org and occasionally returns 403 or 520-527
+# challenge codes under load. Retry these too so blocks don't end up in missed_items.
+RETRY_HTTP_CODES = [403, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]
 
 

@@ -49,71 +49,63 @@ def get_latest_emission():
 
 
 
-class BlockStatisticsView(APIView):
-    @method_decorator(cache_page(5 * 60))
-    def get(self, request, format=None):
-        # Block statistics
-        highest_block_number = QrlBlockchainBlocks.objects.aggregate(
-            max_block_number=Max('block_number')
-        )['max_block_number'] or 0
+def _read_stats_cache(cache_key):
+    """Read a pre-computed stats blob from qrl_blockchain_stats_cache.
 
-        total_rows = QrlBlockchainBlocks.objects.count()
-        adjusted_rows = total_rows - 1 if total_rows > 0 else 0  # block 0 vs row 1
-        compliance_percentage = (
-            round((adjusted_rows / highest_block_number * 100), 2)
-            if highest_block_number > 0 else 0
-        )
-        missing_blocks = highest_block_number - adjusted_rows if highest_block_number and adjusted_rows >= 0 else 0
-
-        # Transaction statistics
-        total_transactions_in_blocks = QrlBlockchainBlocks.objects.aggregate(
-            total_tx_in_blocks=Sum('block_number_of_transactions')
-        )['total_tx_in_blocks'] or 0
-
-        total_transactions_in_database = QrlBlockchainTransactions.objects.values(
-            'transaction_hash'
-        ).distinct().count()
-
-        missing_transactions = total_transactions_in_blocks - total_transactions_in_database
-
-        if total_transactions_in_blocks > 0:
-            compliance_percentage_transactions = round(
-                (total_transactions_in_database / total_transactions_in_blocks) * 100, 2
+    Cache is populated by qrl_analytic_scripts/compute-stats-cache.py (cron).
+    Returns (value_dict, updated_at) or ({}, None) if missing.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT cache_value, updated_at FROM public.qrl_blockchain_stats_cache '
+                'WHERE cache_key = %s',
+                [cache_key],
             )
-        else:
-            compliance_percentage_transactions = 0
-
-        # Wallet statistics: Sum of all wallet balances
-        total_quanta_in_wallets = QrlWalletAddress.objects.aggregate(
-            total_quanta=Sum('address_balance')
-        )['total_quanta'] or 0
-
-        try:
-            emission_clean = get_latest_emission()  # Fetch emission from database
-            missing_quanta = emission_clean - total_quanta_in_wallets
-        except Exception as e:
-            print(f"Error fetching emission from database: {e}")
-            emission_clean = 0
-            missing_quanta = 1000000000  # Default value in case of an error
+            row = cursor.fetchone()
+            if not row:
+                return {}, None
+            return row[0], row[1]
+    except Exception as e:
+        print(f"Error reading stats cache for {cache_key}: {e}")
+        return {}, None
 
 
-
-
+class BlockStatisticsView(APIView):
+    """Block stats — read from qrl_blockchain_stats_cache (cron-refreshed)."""
+    def get(self, request, format=None):
+        value, updated_at = _read_stats_cache('block_stats')
         return Response({
-            # Block stats
-            'highest_block_number': highest_block_number,
-            'total_rows': adjusted_rows,
-            'compliance_percentage': compliance_percentage,
-            'missing_blocks': missing_blocks,
-            # Transaction stats
-            'total_transactions_in_blocks': total_transactions_in_blocks,
-            'total_transactions_in_database': total_transactions_in_database,
-            'missing_transactions': missing_transactions,
-            'compliance_percentage_transactions': compliance_percentage_transactions,
-            # Wallet stats
-            'total_quanta_in_wallets': total_quanta_in_wallets,
-            'emission': emission_clean,
-            'missing_quanta': missing_quanta,
+            'highest_block_number': value.get('highest_block_number', 0),
+            'total_rows': value.get('total_rows', 0),
+            'missing_blocks': value.get('missing_blocks', 0),
+            'compliance_percentage': value.get('compliance_percentage', 0),
+            'cache_updated_at': updated_at.isoformat() if updated_at else None,
+        })
+
+
+class TransactionStatisticsView(APIView):
+    """Transaction stats — read from qrl_blockchain_stats_cache (cron-refreshed)."""
+    def get(self, request, format=None):
+        value, updated_at = _read_stats_cache('transaction_stats')
+        return Response({
+            'total_transactions_in_blocks': value.get('total_transactions_in_blocks', 0),
+            'total_transactions_in_database': value.get('total_transactions_in_database', 0),
+            'missing_transactions': value.get('missing_transactions', 0),
+            'compliance_percentage_transactions': value.get('compliance_percentage_transactions', 0),
+            'cache_updated_at': updated_at.isoformat() if updated_at else None,
+        })
+
+
+class WalletStatisticsView(APIView):
+    """Wallet stats — read from qrl_blockchain_stats_cache (cron-refreshed)."""
+    def get(self, request, format=None):
+        value, updated_at = _read_stats_cache('wallet_stats')
+        return Response({
+            'total_quanta_in_wallets': value.get('total_quanta_in_wallets', 0),
+            'emission': value.get('emission', 0),
+            'missing_quanta': value.get('missing_quanta', 0),
+            'cache_updated_at': updated_at.isoformat() if updated_at else None,
         })
 
 

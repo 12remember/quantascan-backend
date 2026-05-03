@@ -70,7 +70,8 @@ class QRLNetworkSpider(scrapy.Spider):
     def start_requests(self):
         """
         Start requests based on mode:
-            - scrapy crawl qrl_network_spider -a retry=transactions (retry failed transactions)
+            - scrapy crawl qrl_network_spider -a retry=transactions (retry failed transactions from missed_items)
+            - scrapy crawl qrl_network_spider -a retry=blocks (retry failed blocks from missed_items)
             - scrapy crawl qrl_network_spider -a retry=check-blocks-missing-transactions (rescrape incomplete blocks)
             - scrapy crawl qrl_network_spider -a block=12345 (rescrape a specific block)
             - scrapy crawl qrl_network_spider -a block=all (rescrape all blocks)
@@ -98,7 +99,7 @@ class QRLNetworkSpider(scrapy.Spider):
 
         if self.retry == "transactions":
             self.logger.info("Retry mode: Fetching failed transactions.")
-            failed_urls = self.get_failed_urls()
+            failed_urls = self.get_failed_urls("%/tx/%")
             if not failed_urls:
                 self.logger.info("No failed transactions found. Exiting retry mode.")
                 return
@@ -109,6 +110,34 @@ class QRLNetworkSpider(scrapy.Spider):
                     callback=self.parse_transaction,
                     errback=self.errback_conn,
                     meta={"retry_mode": self.retry},
+                )
+
+        elif self.retry == "blocks":
+            self.logger.info("Retry mode: Finding missing block numbers in qrl_blockchain_blocks and rescraping.")
+
+            try:
+                node_resp = requests.get(
+                    "https://zeus-proxy.automated.theqrl.org/grpc/mainnet/GetNodeState",
+                    timeout=10,
+                    headers={"User-Agent": "QuantascanBot/1.0"},
+                )
+                current_height = int(node_resp.json()["info"]["block_height"])
+            except Exception as e:
+                self.logger.error(f"Could not fetch current chain height for retry=blocks: {e}")
+                return
+
+            missing_blocks = self.get_missing_block_numbers(current_height)
+            self.logger.info(
+                f"Chain height: {current_height}. Found {len(missing_blocks)} missing blocks to rescrape."
+            )
+
+            for block_number in missing_blocks:
+                yield scrapy.Request(
+                    url=f"{scrap_url}/api/block/{block_number}",
+                    callback=self.parse_block,
+                    errback=self.errback_conn,
+                    meta={"block_number": block_number, "retry_mode": self.retry},
+                    priority=-block_number,
                 )
 
         elif self.retry == "check-blocks-missing-transactions":
@@ -179,18 +208,17 @@ class QRLNetworkSpider(scrapy.Spider):
     #                           HELPER METHODS
     # -------------------------------------------------------------------------
 
-    def get_failed_urls(self):
-        """Fetch failed transactions from the database (for retry=transactions mode)."""
+    def get_failed_urls(self, url_pattern="%/tx/%"):
+        """Fetch failed item URLs from missed_items, deduplicated, matching the given LIKE pattern."""
         try:
             self.cur.execute(
-                'SELECT item_url FROM public."qrl_blockchain_missed_items" WHERE item_url LIKE %s',
-                ["%/tx/%"],
+                'SELECT DISTINCT item_url FROM public."qrl_blockchain_missed_items" WHERE item_url LIKE %s',
+                [url_pattern],
             )
             failed_urls = [row[0] for row in self.cur.fetchall()]
-            self.logger.info(f"Found {len(failed_urls)} failed transactions.")
-            # ✅ Log every failed transaction URL to verify structure
+            self.logger.info(f"Found {len(failed_urls)} failed URLs matching {url_pattern}.")
             for url in failed_urls:
-                self.logger.info(f"Retrying failed transaction URL: {url} | Type: {type(url)}")
+                self.logger.info(f"Retrying failed URL: {url}")
             return failed_urls
         except psycopg2.Error as e:
             self.logger.error(f"Database error in get_failed_urls: {e}")
@@ -264,6 +292,32 @@ class QRLNetworkSpider(scrapy.Spider):
             self.logger.info(f"Removed error for URL: {url}")
         except psycopg2.Error as e:
             self.logger.error(f"Database error in remove_error: {e}")
+            self.connection.rollback()
+
+    def get_missing_block_numbers(self, current_height):
+        """Returns sorted list of block numbers from 0..current_height not present in qrl_blockchain_blocks."""
+        try:
+            self.cur.execute('SELECT "block_number" FROM public."qrl_blockchain_blocks"')
+            existing = {row[0] for row in self.cur.fetchall()}
+            expected = set(range(0, current_height + 1))
+            return sorted(expected - existing)
+        except psycopg2.Error as e:
+            self.logger.error(f"Database error in get_missing_block_numbers: {e}")
+            return []
+
+    def remove_error_by_block_number(self, block_number):
+        """Remove all missed_items rows whose URL ends with /block/<block_number>."""
+        try:
+            self.cur.execute(
+                'DELETE FROM public."qrl_blockchain_missed_items" WHERE item_url LIKE %s',
+                [f"%/block/{block_number}"],
+            )
+            deleted = self.cur.rowcount
+            self.connection.commit()
+            if deleted:
+                self.logger.info(f"Removed {deleted} missed_items row(s) for block {block_number}.")
+        except psycopg2.Error as e:
+            self.logger.error(f"Database error in remove_error_by_block_number({block_number}): {e}")
             self.connection.rollback()
 
     # -------------------------------------------------------------------------
@@ -385,6 +439,9 @@ class QRLNetworkSpider(scrapy.Spider):
 
             if item_block["block_found"] == True:
                 yield QRLNetworkBlockItem(item_block)
+
+                if response.meta.get("retry_mode") == "blocks":
+                    self.remove_error_by_block_number(item_block["block_number"])
 
                 for transaction in block_extended["extended_transactions"]:
                     transaction_tx = transaction["tx"]
@@ -712,6 +769,9 @@ class QRLNetworkSpider(scrapy.Spider):
 
             # Note: We have scheduled wallet requests immediately in each branch,
             # so the final loop (which fetched both addresses) is now removed.
+
+            if response.meta.get("retry_mode") == "transactions":
+                self.remove_error(response.url)
         except Exception as error:
             self.logger.error(f"Error in parse_transaction: {error}")
             yield self.handle_error(response, error)
@@ -814,8 +874,11 @@ class QRLNetworkSpider(scrapy.Spider):
         item_missed["item_url"] = failure.request.url
 
         if failure.check(HttpError):
-            item_missed["error_name"] = str(failure.__class__)
-            item_missed["error_type"] = str(failure.value.response)
+            response = failure.value.response
+            status = getattr(response, "status", "unknown")
+            item_missed["error_name"] = f"HttpError {status}"
+            item_missed["error_type"] = f"HTTP {status} on {failure.request.url}"
+            self.logger.warning(f"HttpError {status} on {failure.request.url}")
 
         elif failure.check(DNSLookupError):
             item_missed["error_name"] = str(failure.__class__)
@@ -825,4 +888,4 @@ class QRLNetworkSpider(scrapy.Spider):
             item_missed["error_name"] = str(failure.__class__)
             item_missed["error_type"] = "Timeout Error"
 
-        return item_missed 
+        return item_missed
