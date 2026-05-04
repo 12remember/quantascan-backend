@@ -48,24 +48,23 @@ USER_AGENT = 'QuantaScan.io (https://quantascan.io)'
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = False
 
-# Configure maximum concurrent requests performed by Scrapy (default: 16)
-CONCURRENT_REQUESTS = 4
-
-# Configure a delay for requests for the same website (default: 0)
-DOWNLOAD_DELAY = 1.0
-CONCURRENT_REQUESTS_PER_DOMAIN = 4
+# explorer.theqrl.org gebruikt een eigen app-level rate-limit (code 4290 in de
+# 403-body). Op Heroku ligt onze totale request-rate snel boven die limiet,
+# wat leidt tot een ban-window per IP. Vandaar conservatieve waardes.
+CONCURRENT_REQUESTS = 1
+CONCURRENT_REQUESTS_PER_DOMAIN = 1
+DOWNLOAD_DELAY = 3.0
 REACTOR_THREADPOOL_MAXSIZE = 10
 
 # Add random delay to avoid being blocked
 RANDOMIZE_DOWNLOAD_DELAY = True
 
-# AutoThrottle: scaalt zelf op/af op basis van server-response. Voorkomt 429s
-# van de Cloudflare-rate-limit op explorer.theqrl.org en gaat sneller wanneer
-# de server het aankan dan vaste DOWNLOAD_DELAY.
+# AutoThrottle baseert zich op response-tijd; rate-limit-responses zijn snel,
+# dus zonder lage TARGET_CONCURRENCY zou hij juist versnellen bij bans.
 AUTOTHROTTLE_ENABLED = True
-AUTOTHROTTLE_START_DELAY = 1.0
-AUTOTHROTTLE_MAX_DELAY = 30.0
-AUTOTHROTTLE_TARGET_CONCURRENCY = 2.0
+AUTOTHROTTLE_START_DELAY = 3.0
+AUTOTHROTTLE_MAX_DELAY = 120.0
+AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5
 AUTOTHROTTLE_DEBUG = False
 
 # Memory management
@@ -98,9 +97,11 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Add timeout settings
 DOWNLOAD_TIMEOUT = 30
-RETRY_TIMES = 5
-# Cloudflare fronts explorer.theqrl.org and occasionally returns 403 or 520-527
-# challenge codes under load. Retry these too so blocks don't end up in missed_items.
-RETRY_HTTP_CODES = [403, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]
+RETRY_TIMES = 3
+# 403 wordt door explorer.theqrl.org gebruikt als rate-limit signaal
+# (response body: {"error": "Rate limit exceeded", "code": 4290}). Daar
+# direct op retryen verergert de ban; die blocks gaan naar missed_items
+# en pikken we later op via `scrapy crawl ... -a retry=blocks`.
+RETRY_HTTP_CODES = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]
 
 
